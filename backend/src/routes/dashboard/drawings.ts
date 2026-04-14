@@ -20,7 +20,7 @@ import {
 
 export const registerDrawingRoutes = (
   app: express.Express,
-  deps: DashboardRouteDeps
+  deps: DashboardRouteDeps,
 ) => {
   const {
     prisma,
@@ -43,7 +43,7 @@ export const registerDrawingRoutes = (
   } = deps;
 
   const getRequestPrincipal = async (
-    req: express.Request
+    req: express.Request,
   ): Promise<DrawingPrincipal | null> => {
     if (req.user?.id) {
       return { kind: "user", userId: req.user.id };
@@ -58,7 +58,9 @@ export const registerDrawingRoutes = (
         : process.env.LINK_SHARE_VIEW_DEFAULT_TTL_MS;
     const parsed = raw ? Number(raw) : NaN;
     if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    return permission === "edit" ? 7 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
+    return permission === "edit"
+      ? 7 * 24 * 60 * 60 * 1000
+      : 30 * 24 * 60 * 60 * 1000;
   };
 
   const resolveMaxTtlMs = (): number => {
@@ -69,7 +71,7 @@ export const registerDrawingRoutes = (
 
   const respondWithAuthErrorIfPresent = (
     req: express.Request,
-    res: express.Response
+    res: express.Response,
   ): boolean => {
     if (!req.authError) return false;
 
@@ -80,597 +82,853 @@ export const registerDrawingRoutes = (
     return true;
   };
 
-  app.get("/drawings", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
-    const trashCollectionId = getUserTrashCollectionId(req.user.id);
-    const { search, collectionId, includeData, limit, offset, sortField, sortDirection } = req.query;
-    const where: Prisma.DrawingWhereInput = { userId: req.user.id };
-    const searchTerm =
-      typeof search === "string" && search.trim().length > 0 ? search.trim() : undefined;
-
-    if (searchTerm) {
-      where.name = { contains: searchTerm };
-    }
-
-    let collectionFilterKey = "default";
-    if (collectionId === "null") {
-      where.collectionId = null;
-      collectionFilterKey = "null";
-    } else if (collectionId) {
-      const normalizedCollectionId = String(collectionId);
-      if (normalizedCollectionId === "trash") {
-        where.collectionId = { in: [trashCollectionId, "trash"] };
-        collectionFilterKey = "trash";
-      } else {
-        const collection = await prisma.collection.findFirst({
-          where: { id: normalizedCollectionId, userId: req.user.id },
-        });
-        if (!collection) {
-          return res.status(404).json({ error: "Collection not found" });
-        }
-        where.collectionId = normalizedCollectionId;
-        collectionFilterKey = `id:${normalizedCollectionId}`;
+  app.get(
+    "/drawings",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) {
+        return res.status(401).json({ error: "Unauthorized" });
       }
-    } else {
-      where.OR = [
-        { collectionId: { notIn: [trashCollectionId, "trash"] } },
-        { collectionId: null },
-      ];
-    }
 
-    const shouldIncludeData =
-      typeof includeData === "string"
-        ? includeData.toLowerCase() === "true" || includeData === "1"
-        : false;
-    const parsedSortField: SortField =
-      sortField === "name" || sortField === "createdAt" || sortField === "updatedAt"
-        ? sortField
-        : "updatedAt";
-    const parsedSortDirection: SortDirection =
-      sortDirection === "asc" || sortDirection === "desc"
-        ? sortDirection
-        : parsedSortField === "name"
-        ? "asc"
-        : "desc";
+      const trashCollectionId = getUserTrashCollectionId(req.user.id);
+      const {
+        search,
+        collectionId,
+        includeData,
+        limit,
+        offset,
+        sortField,
+        sortDirection,
+      } = req.query;
+      const where: Prisma.DrawingWhereInput = { userId: req.user.id };
+      const searchTerm =
+        typeof search === "string" && search.trim().length > 0
+          ? search.trim()
+          : undefined;
 
-    const rawLimit = limit ? Number.parseInt(limit as string, 10) : undefined;
-    const rawOffset = offset ? Number.parseInt(offset as string, 10) : undefined;
-    const parsedLimit =
-      rawLimit !== undefined && Number.isFinite(rawLimit)
-        ? Math.min(Math.max(rawLimit, 1), MAX_PAGE_SIZE)
+      if (searchTerm) {
+        where.name = { contains: searchTerm };
+      }
+
+      let collectionFilterKey = "default";
+      if (collectionId === "null") {
+        where.collectionId = null;
+        collectionFilterKey = "null";
+      } else if (collectionId) {
+        const normalizedCollectionId = String(collectionId);
+        if (normalizedCollectionId === "trash") {
+          where.collectionId = { in: [trashCollectionId, "trash"] };
+          collectionFilterKey = "trash";
+        } else {
+          const collection = await prisma.collection.findFirst({
+            where: { id: normalizedCollectionId },
+          });
+          if (!collection) {
+            return res.status(404).json({ error: "Collection not found" });
+          }
+
+          // Check if user is owner or has a share entry
+          const isOwner = collection.userId === req.user.id;
+          if (!isOwner) {
+            const share = await prisma.collectionShare.findFirst({
+              where: {
+                collectionId: normalizedCollectionId,
+                granteeUserId: req.user.id,
+              },
+            });
+            if (!share) {
+              return res.status(404).json({ error: "Collection not found" });
+            }
+          }
+          // Always fetch all drawings in the collection regardless of who created them
+          delete (where as any).userId;
+
+          where.collectionId = normalizedCollectionId;
+          collectionFilterKey = `id:${normalizedCollectionId}`;
+        }
+      } else {
+        where.OR = [
+          { collectionId: { notIn: [trashCollectionId, "trash"] } },
+          { collectionId: null },
+        ];
+      }
+
+      const shouldIncludeData =
+        typeof includeData === "string"
+          ? includeData.toLowerCase() === "true" || includeData === "1"
+          : false;
+      const parsedSortField: SortField =
+        sortField === "name" ||
+        sortField === "createdAt" ||
+        sortField === "updatedAt"
+          ? sortField
+          : "updatedAt";
+      const parsedSortDirection: SortDirection =
+        sortDirection === "asc" || sortDirection === "desc"
+          ? sortDirection
+          : parsedSortField === "name"
+            ? "asc"
+            : "desc";
+
+      const rawLimit = limit ? Number.parseInt(limit as string, 10) : undefined;
+      const rawOffset = offset
+        ? Number.parseInt(offset as string, 10)
         : undefined;
-    const parsedOffset =
-      rawOffset !== undefined && Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : undefined;
+      const parsedLimit =
+        rawLimit !== undefined && Number.isFinite(rawLimit)
+          ? Math.min(Math.max(rawLimit, 1), MAX_PAGE_SIZE)
+          : undefined;
+      const parsedOffset =
+        rawOffset !== undefined && Number.isFinite(rawOffset)
+          ? Math.max(rawOffset, 0)
+          : undefined;
 
-    const cacheKey =
-      buildDrawingsCacheKey({
-        userId: req.user.id,
-        searchTerm: searchTerm ?? "",
-        collectionFilter: collectionFilterKey,
-        includeData: shouldIncludeData,
-        sortField: parsedSortField,
-        sortDirection: parsedSortDirection,
-      }) + `:${parsedLimit}:${parsedOffset}`;
+      const cacheKey =
+        buildDrawingsCacheKey({
+          userId: req.user.id,
+          searchTerm: searchTerm ?? "",
+          collectionFilter: collectionFilterKey,
+          includeData: shouldIncludeData,
+          sortField: parsedSortField,
+          sortDirection: parsedSortDirection,
+        }) + `:${parsedLimit}:${parsedOffset}`;
 
-    const cachedBody = getCachedDrawingsBody(cacheKey);
-    if (cachedBody) {
-      res.setHeader("X-Cache", "HIT");
-      res.setHeader("Content-Type", "application/json");
-      return res.send(cachedBody);
-    }
+      const cachedBody = getCachedDrawingsBody(cacheKey);
+      if (cachedBody) {
+        res.setHeader("X-Cache", "HIT");
+        res.setHeader("Content-Type", "application/json");
+        return res.send(cachedBody);
+      }
 
-    const summarySelect: Prisma.DrawingSelect = {
-      id: true,
-      name: true,
-      collectionId: true,
-      preview: true,
-      version: true,
-      createdAt: true,
-      updatedAt: true,
-    };
-
-    const orderBy: Prisma.DrawingOrderByWithRelationInput =
-      parsedSortField === "name"
-        ? { name: parsedSortDirection }
-        : parsedSortField === "createdAt"
-        ? { createdAt: parsedSortDirection }
-        : { updatedAt: parsedSortDirection };
-
-    const queryOptions: Prisma.DrawingFindManyArgs = { where, orderBy };
-    if (parsedLimit !== undefined) queryOptions.take = parsedLimit;
-    if (parsedOffset !== undefined) queryOptions.skip = parsedOffset;
-    if (!shouldIncludeData) queryOptions.select = summarySelect;
-
-    const [drawings, totalCount] = await Promise.all([
-      prisma.drawing.findMany(queryOptions),
-      prisma.drawing.count({ where }),
-    ]);
-
-    let responsePayload: any[] = drawings as any[];
-    if (shouldIncludeData) {
-      responsePayload = (drawings as any[]).map((d: any) => ({
-        ...d,
-        collectionId: toPublicTrashCollectionId(d.collectionId, req.user!.id),
-        elements: parseJsonField(d.elements, []),
-        appState: parseJsonField(d.appState, {}),
-        files: parseJsonField(d.files, {}),
-      }));
-    } else {
-      responsePayload = (drawings as any[]).map((d: any) => ({
-        ...d,
-        collectionId: toPublicTrashCollectionId(d.collectionId, req.user!.id),
-      }));
-    }
-
-    const finalResponse = {
-      drawings: responsePayload,
-      totalCount,
-      limit: parsedLimit,
-      offset: parsedOffset,
-    };
-
-    const body = cacheDrawingsResponse(cacheKey, finalResponse);
-    res.setHeader("X-Cache", "MISS");
-    res.setHeader("Content-Type", "application/json");
-    return res.send(body);
-  }));
-
-  // Shared with me list (does not mix into /drawings cache semantics)
-  // Must be registered before `/drawings/:id` so it doesn't get treated as a drawing id.
-  app.get("/drawings/shared", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-
-    const { search, includeData, limit, offset, sortField, sortDirection } = req.query;
-    const searchTerm =
-      typeof search === "string" && search.trim().length > 0 ? search.trim() : undefined;
-
-    const shouldIncludeData =
-      typeof includeData === "string"
-        ? includeData.toLowerCase() === "true" || includeData === "1"
-        : false;
-    const parsedSortField: SortField =
-      sortField === "name" || sortField === "createdAt" || sortField === "updatedAt"
-        ? sortField
-        : "updatedAt";
-    const parsedSortDirection: SortDirection =
-      sortDirection === "asc" || sortDirection === "desc"
-        ? sortDirection
-        : parsedSortField === "name"
-        ? "asc"
-        : "desc";
-
-    const rawLimit = limit ? Number.parseInt(limit as string, 10) : undefined;
-    const rawOffset = offset ? Number.parseInt(offset as string, 10) : undefined;
-    const parsedLimit =
-      rawLimit !== undefined && Number.isFinite(rawLimit)
-        ? Math.min(Math.max(rawLimit, 1), MAX_PAGE_SIZE)
-        : undefined;
-    const parsedOffset =
-      rawOffset !== undefined && Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : undefined;
-
-    const orderBy: Prisma.DrawingOrderByWithRelationInput =
-      parsedSortField === "name"
-        ? { name: parsedSortDirection }
-        : parsedSortField === "createdAt"
-        ? { createdAt: parsedSortDirection }
-        : { updatedAt: parsedSortDirection };
-
-    const whereDrawing: Prisma.DrawingWhereInput = {
-      // "Shared with me" should only include drawings owned by someone else.
-      // Some deployments keep an owner self-permission row for access control; exclude those.
-      userId: { not: req.user.id },
-      permissions: {
-        some: {
-          granteeUserId: req.user.id,
-        },
-      },
-    };
-    if (searchTerm) {
-      whereDrawing.name = { contains: searchTerm };
-    }
-
-    const summarySelect: Prisma.DrawingSelect = {
-      id: true,
-      name: true,
-      collectionId: true,
-      preview: true,
-      version: true,
-      createdAt: true,
-      updatedAt: true,
-      userId: true,
-      permissions: {
-        where: { granteeUserId: req.user.id },
-        select: { permission: true },
-      },
-    };
-
-    const queryOptions: Prisma.DrawingFindManyArgs = { where: whereDrawing, orderBy };
-    if (parsedLimit !== undefined) queryOptions.take = parsedLimit;
-    if (parsedOffset !== undefined) queryOptions.skip = parsedOffset;
-    if (!shouldIncludeData) queryOptions.select = summarySelect;
-
-    const [drawings, totalCount] = await Promise.all([
-      prisma.drawing.findMany(queryOptions),
-      prisma.drawing.count({ where: whereDrawing }),
-    ]);
-
-    const normalize = (d: any) => {
-      const rawPerm = Array.isArray(d?.permissions) ? d.permissions[0]?.permission : null;
-      const perm = normalizeDrawingPermission(rawPerm) ?? "view";
-      const { permissions: _permissions, ...rest } = d;
-      return {
-        ...rest,
-        // Collections are owner-scoped; don't leak the owner's collection ids to viewers.
-        collectionId: null,
-        accessLevel: perm,
+      const summarySelect: Prisma.DrawingSelect = {
+        id: true,
+        name: true,
+        collectionId: true,
+        preview: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+        user: { select: { id: true, name: true } },
       };
-    };
 
-    let responsePayload: any[] = drawings as any[];
-    if (shouldIncludeData) {
-      responsePayload = (drawings as any[]).map((d: any) => {
-        const normalized = normalize(d);
-        return {
-          ...normalized,
+      const orderBy: Prisma.DrawingOrderByWithRelationInput =
+        parsedSortField === "name"
+          ? { name: parsedSortDirection }
+          : parsedSortField === "createdAt"
+            ? { createdAt: parsedSortDirection }
+            : { updatedAt: parsedSortDirection };
+
+      const queryOptions: Prisma.DrawingFindManyArgs = { where, orderBy };
+      if (parsedLimit !== undefined) queryOptions.take = parsedLimit;
+      if (parsedOffset !== undefined) queryOptions.skip = parsedOffset;
+      if (!shouldIncludeData) queryOptions.select = summarySelect;
+
+      const [drawings, totalCount] = await Promise.all([
+        prisma.drawing.findMany(queryOptions),
+        prisma.drawing.count({ where }),
+      ]);
+
+      let responsePayload: any[] = drawings as any[];
+      if (shouldIncludeData) {
+        responsePayload = (drawings as any[]).map((d: any) => ({
+          ...d,
+          collectionId: toPublicTrashCollectionId(d.collectionId, req.user!.id),
           elements: parseJsonField(d.elements, []),
           appState: parseJsonField(d.appState, {}),
           files: parseJsonField(d.files, {}),
-        };
-      });
-    } else {
-      responsePayload = (drawings as any[]).map((d: any) => normalize(d));
-    }
-
-    return res.json({
-      drawings: responsePayload,
-      totalCount,
-      limit: parsedLimit,
-      offset: parsedOffset,
-    });
-  }));
-
-  app.get("/drawings/:id", optionalAuth, asyncHandler(async (req, res) => {
-    const principal = await getRequestPrincipal(req);
-
-    const { id } = req.params;
-    const access = await getDrawingAccess({ prisma, principal, drawingId: id });
-    if (!canViewDrawing(access)) {
-      if (respondWithAuthErrorIfPresent(req, res)) return;
-      return res.status(404).json({ error: "Drawing not found", message: "Drawing does not exist" });
-    }
-
-    const drawing = await prisma.drawing.findUnique({ where: { id } });
-    if (!drawing) {
-      return res.status(404).json({ error: "Drawing not found", message: "Drawing does not exist" });
-    }
-
-    const isOwner = principal?.kind === "user" && principal.userId === drawing.userId;
-    return res.json({
-      ...drawing,
-      // Collections (and trash mapping) are owner-scoped. For shared/public access, avoid leaking
-      // owner collection ids like `trash:<ownerId>` and avoid implying the viewer can organize it.
-      collectionId: isOwner ? toPublicTrashCollectionId(drawing.collectionId, drawing.userId) : null,
-      elements: parseJsonField(drawing.elements, []),
-      appState: parseJsonField(drawing.appState, {}),
-      files: parseJsonField(drawing.files, {}),
-      accessLevel: access,
-    });
-  }));
-
-  app.post("/drawings", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-
-    const isImportedDrawing = req.headers["x-imported-file"] === "true";
-    if (isImportedDrawing && !validateImportedDrawing(req.body)) {
-      return res.status(400).json({
-        error: "Invalid imported drawing file",
-        message: "The imported file contains potentially malicious content or invalid structure",
-      });
-    }
-
-    const parsed = drawingCreateSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return respondWithValidationErrors(res, parsed.error.issues);
-    }
-
-    const payload = parsed.data as {
-      name?: string;
-      collectionId?: string | null;
-      elements: unknown[];
-      appState: Record<string, unknown>;
-      preview?: string | null;
-      files?: Record<string, unknown>;
-    };
-    const drawingName = payload.name ?? "Untitled Drawing";
-    const targetCollectionIdRaw = payload.collectionId === undefined ? null : payload.collectionId;
-    const targetCollectionId =
-      toInternalTrashCollectionId(targetCollectionIdRaw, req.user.id) ?? null;
-
-    if (targetCollectionId && !isTrashCollectionId(targetCollectionId, req.user.id)) {
-      const collection = await prisma.collection.findFirst({
-        where: { id: targetCollectionId, userId: req.user.id },
-      });
-      if (!collection) return res.status(404).json({ error: "Collection not found" });
-    } else if (targetCollectionIdRaw === "trash") {
-      await ensureTrashCollection(prisma, req.user.id);
-    }
-
-    const newDrawing = await prisma.drawing.create({
-      data: {
-        name: drawingName,
-        elements: JSON.stringify(payload.elements),
-        appState: JSON.stringify(payload.appState),
-        userId: req.user.id,
-        collectionId: targetCollectionId,
-        preview: payload.preview ?? null,
-        files: JSON.stringify(payload.files ?? {}),
-      },
-    });
-    invalidateDrawingsCache();
-
-    return res.json({
-      ...newDrawing,
-      collectionId: toPublicTrashCollectionId(newDrawing.collectionId, req.user.id),
-      elements: parseJsonField(newDrawing.elements, []),
-      appState: parseJsonField(newDrawing.appState, {}),
-      files: parseJsonField(newDrawing.files, {}),
-    });
-  }));
-
-  app.put("/drawings/:id", optionalAuth, asyncHandler(async (req, res) => {
-    const principal = await getRequestPrincipal(req);
-
-    const { id } = req.params;
-    const access = await getDrawingAccess({ prisma, principal, drawingId: id });
-    if (!canEditDrawing(access)) {
-      if (respondWithAuthErrorIfPresent(req, res)) return;
-      return res.status(404).json({ error: "Drawing not found" });
-    }
-
-    const existingDrawing = await prisma.drawing.findUnique({ where: { id } });
-    if (!existingDrawing) return res.status(404).json({ error: "Drawing not found" });
-
-    const parsed = drawingUpdateSchema.safeParse(req.body);
-    if (!parsed.success) {
-      if (config.nodeEnv === "development") {
-        console.error("[API] Validation failed", { id, errors: parsed.error.issues });
-      }
-      return respondWithValidationErrors(res, parsed.error.issues);
-    }
-
-    const payload = parsed.data as {
-      name?: string;
-      collectionId?: string | null;
-      elements?: unknown[];
-      appState?: Record<string, unknown>;
-      preview?: string | null;
-      files?: Record<string, unknown>;
-      version?: number;
-    };
-    const ownerUserId = existingDrawing.userId;
-    const trashCollectionId = getUserTrashCollectionId(ownerUserId);
-    const isSceneUpdate =
-      payload.elements !== undefined ||
-      payload.appState !== undefined ||
-      payload.files !== undefined;
-    const data: Prisma.DrawingUpdateInput = isSceneUpdate
-      ? { version: { increment: 1 } }
-      : {};
-
-    if (payload.name !== undefined) data.name = payload.name;
-    if (payload.elements !== undefined) data.elements = JSON.stringify(payload.elements);
-    if (payload.appState !== undefined) data.appState = JSON.stringify(payload.appState);
-    if (payload.files !== undefined) data.files = JSON.stringify(payload.files);
-    if (payload.preview !== undefined) data.preview = payload.preview;
-
-    if (payload.collectionId !== undefined) {
-      if (!isOwnerAccess(access)) {
-        return res.status(403).json({
-          error: "Forbidden",
-          message: "Only the owner can move drawings between collections",
-        });
-      }
-      if (payload.collectionId === "trash") {
-        await ensureTrashCollection(prisma, ownerUserId);
-        (data as Prisma.DrawingUncheckedUpdateInput).collectionId = trashCollectionId;
-      } else if (payload.collectionId) {
-        const collection = await prisma.collection.findFirst({
-          where: { id: payload.collectionId, userId: ownerUserId },
-        });
-        if (!collection) return res.status(404).json({ error: "Collection not found" });
-        (data as Prisma.DrawingUncheckedUpdateInput).collectionId = payload.collectionId;
+          creatorName: d.user?.name ?? null,
+          user: undefined,
+        }));
       } else {
-        (data as Prisma.DrawingUncheckedUpdateInput).collectionId = null;
+        responsePayload = (drawings as any[]).map((d: any) => ({
+          ...d,
+          collectionId: toPublicTrashCollectionId(d.collectionId, req.user!.id),
+          creatorName: d.user?.name ?? null,
+          user: undefined,
+        }));
       }
-    }
 
-    const updateWhere: Prisma.DrawingWhereInput = { id };
-    if (isSceneUpdate && payload.version !== undefined) {
-      updateWhere.version = payload.version;
-    }
+      const finalResponse = {
+        drawings: responsePayload,
+        totalCount,
+        limit: parsedLimit,
+        offset: parsedOffset,
+      };
 
-    const versionConflictError = new Error("VERSION_CONFLICT");
-    let updatedDrawing: typeof existingDrawing | null = null;
+      const body = cacheDrawingsResponse(cacheKey, finalResponse);
+      res.setHeader("X-Cache", "MISS");
+      res.setHeader("Content-Type", "application/json");
+      return res.send(body);
+    }),
+  );
 
-    try {
-      if (isSceneUpdate) {
-        updatedDrawing = await prisma.$transaction(async (tx) => {
-          await tx.drawingSnapshot.create({
-            data: {
-              drawingId: id,
-              version: existingDrawing.version,
-              elements: existingDrawing.elements,
-              appState: existingDrawing.appState,
-              files: existingDrawing.files,
+  // Shared with me list (does not mix into /drawings cache semantics)
+  // Must be registered before `/drawings/:id` so it doesn't get treated as a drawing id.
+  app.get(
+    "/drawings/shared",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+
+      const { search, includeData, limit, offset, sortField, sortDirection } =
+        req.query;
+      const searchTerm =
+        typeof search === "string" && search.trim().length > 0
+          ? search.trim()
+          : undefined;
+
+      const shouldIncludeData =
+        typeof includeData === "string"
+          ? includeData.toLowerCase() === "true" || includeData === "1"
+          : false;
+      const parsedSortField: SortField =
+        sortField === "name" ||
+        sortField === "createdAt" ||
+        sortField === "updatedAt"
+          ? sortField
+          : "updatedAt";
+      const parsedSortDirection: SortDirection =
+        sortDirection === "asc" || sortDirection === "desc"
+          ? sortDirection
+          : parsedSortField === "name"
+            ? "asc"
+            : "desc";
+
+      const rawLimit = limit ? Number.parseInt(limit as string, 10) : undefined;
+      const rawOffset = offset
+        ? Number.parseInt(offset as string, 10)
+        : undefined;
+      const parsedLimit =
+        rawLimit !== undefined && Number.isFinite(rawLimit)
+          ? Math.min(Math.max(rawLimit, 1), MAX_PAGE_SIZE)
+          : undefined;
+      const parsedOffset =
+        rawOffset !== undefined && Number.isFinite(rawOffset)
+          ? Math.max(rawOffset, 0)
+          : undefined;
+
+      const orderBy: Prisma.DrawingOrderByWithRelationInput =
+        parsedSortField === "name"
+          ? { name: parsedSortDirection }
+          : parsedSortField === "createdAt"
+            ? { createdAt: parsedSortDirection }
+            : { updatedAt: parsedSortDirection };
+
+      // Get collection IDs shared with this user to exclude drawings already visible via collection sharing
+      const sharedCollectionIds = await prisma.collectionShare.findMany({
+        where: { granteeUserId: req.user.id },
+        select: { collectionId: true },
+      });
+      const sharedColIds = sharedCollectionIds.map((s) => s.collectionId);
+
+      const whereDrawing: Prisma.DrawingWhereInput = {
+        // "Shared with me" should only include drawings owned by someone else.
+        // Some deployments keep an owner self-permission row for access control; exclude those.
+        userId: { not: req.user.id },
+        permissions: {
+          some: {
+            granteeUserId: req.user.id,
+          },
+        },
+        // Exclude drawings already accessible via a shared collection
+        ...(sharedColIds.length > 0 && {
+          NOT: {
+            collectionId: { in: sharedColIds },
+          },
+        }),
+      };
+      if (searchTerm) {
+        whereDrawing.name = { contains: searchTerm };
+      }
+
+      const summarySelect: Prisma.DrawingSelect = {
+        id: true,
+        name: true,
+        collectionId: true,
+        preview: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+        userId: true,
+        permissions: {
+          where: { granteeUserId: req.user.id },
+          select: { permission: true },
+        },
+      };
+
+      const queryOptions: Prisma.DrawingFindManyArgs = {
+        where: whereDrawing,
+        orderBy,
+      };
+      if (parsedLimit !== undefined) queryOptions.take = parsedLimit;
+      if (parsedOffset !== undefined) queryOptions.skip = parsedOffset;
+      if (!shouldIncludeData) queryOptions.select = summarySelect;
+
+      const [drawings, totalCount] = await Promise.all([
+        prisma.drawing.findMany(queryOptions),
+        prisma.drawing.count({ where: whereDrawing }),
+      ]);
+
+      const normalize = (d: any) => {
+        const rawPerm = Array.isArray(d?.permissions)
+          ? d.permissions[0]?.permission
+          : null;
+        const perm = normalizeDrawingPermission(rawPerm) ?? "view";
+        const { permissions: _permissions, ...rest } = d;
+        return {
+          ...rest,
+          // Collections are owner-scoped; don't leak the owner's collection ids to viewers.
+          collectionId: null,
+          accessLevel: perm,
+        };
+      };
+
+      let responsePayload: any[] = drawings as any[];
+      if (shouldIncludeData) {
+        responsePayload = (drawings as any[]).map((d: any) => {
+          const normalized = normalize(d);
+          return {
+            ...normalized,
+            elements: parseJsonField(d.elements, []),
+            appState: parseJsonField(d.appState, {}),
+            files: parseJsonField(d.files, {}),
+          };
+        });
+      } else {
+        responsePayload = (drawings as any[]).map((d: any) => normalize(d));
+      }
+
+      return res.json({
+        drawings: responsePayload,
+        totalCount,
+        limit: parsedLimit,
+        offset: parsedOffset,
+      });
+    }),
+  );
+
+  app.get(
+    "/drawings/:id",
+    optionalAuth,
+    asyncHandler(async (req, res) => {
+      const principal = await getRequestPrincipal(req);
+
+      const { id } = req.params;
+      const access = await getDrawingAccess({
+        prisma,
+        principal,
+        drawingId: id,
+      });
+      if (!canViewDrawing(access)) {
+        if (respondWithAuthErrorIfPresent(req, res)) return;
+        return res.status(404).json({
+          error: "Drawing not found",
+          message: "Drawing does not exist",
+        });
+      }
+
+      const drawing = await prisma.drawing.findUnique({ where: { id } });
+      if (!drawing) {
+        return res.status(404).json({
+          error: "Drawing not found",
+          message: "Drawing does not exist",
+        });
+      }
+
+      const isOwner =
+        principal?.kind === "user" && principal.userId === drawing.userId;
+      return res.json({
+        ...drawing,
+        // Collections (and trash mapping) are owner-scoped. For shared/public access, avoid leaking
+        // owner collection ids like `trash:<ownerId>` and avoid implying the viewer can organize it.
+        collectionId: isOwner
+          ? toPublicTrashCollectionId(drawing.collectionId, drawing.userId)
+          : null,
+        elements: parseJsonField(drawing.elements, []),
+        appState: parseJsonField(drawing.appState, {}),
+        files: parseJsonField(drawing.files, {}),
+        accessLevel: access,
+      });
+    }),
+  );
+
+  app.post(
+    "/drawings",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+
+      const isImportedDrawing = req.headers["x-imported-file"] === "true";
+      if (isImportedDrawing && !validateImportedDrawing(req.body)) {
+        return res.status(400).json({
+          error: "Invalid imported drawing file",
+          message:
+            "The imported file contains potentially malicious content or invalid structure",
+        });
+      }
+
+      const parsed = drawingCreateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return respondWithValidationErrors(res, parsed.error.issues);
+      }
+
+      const payload = parsed.data as {
+        name?: string;
+        collectionId?: string | null;
+        elements: unknown[];
+        appState: Record<string, unknown>;
+        preview?: string | null;
+        files?: Record<string, unknown>;
+      };
+      const drawingName = payload.name ?? "Untitled Drawing";
+      const targetCollectionIdRaw =
+        payload.collectionId === undefined ? null : payload.collectionId;
+      const targetCollectionId =
+        toInternalTrashCollectionId(targetCollectionIdRaw, req.user.id) ?? null;
+
+      if (
+        targetCollectionId &&
+        !isTrashCollectionId(targetCollectionId, req.user.id)
+      ) {
+        const collection = await prisma.collection.findFirst({
+          where: { id: targetCollectionId },
+        });
+        if (!collection)
+          return res.status(404).json({ error: "Collection not found" });
+
+        // If the collection belongs to someone else, check the user has editor access
+        if (collection.userId !== req.user.id) {
+          const share = await prisma.collectionShare.findFirst({
+            where: {
+              collectionId: targetCollectionId,
+              granteeUserId: req.user.id,
+              role: "edit",
             },
           });
+          if (!share)
+            return res
+              .status(403)
+              .json({ error: "No edit access to this collection" });
+        }
+      } else if (targetCollectionIdRaw === "trash") {
+        await ensureTrashCollection(prisma, req.user.id);
+      }
 
-          const updateResult = await tx.drawing.updateMany({
+      const newDrawing = await prisma.drawing.create({
+        data: {
+          name: drawingName,
+          elements: JSON.stringify(payload.elements),
+          appState: JSON.stringify(payload.appState),
+          userId: req.user.id,
+          collectionId: targetCollectionId,
+          preview: payload.preview ?? null,
+          files: JSON.stringify(payload.files ?? {}),
+        },
+      });
+      invalidateDrawingsCache();
+
+      return res.json({
+        ...newDrawing,
+        collectionId: toPublicTrashCollectionId(
+          newDrawing.collectionId,
+          req.user.id,
+        ),
+        elements: parseJsonField(newDrawing.elements, []),
+        appState: parseJsonField(newDrawing.appState, {}),
+        files: parseJsonField(newDrawing.files, {}),
+      });
+    }),
+  );
+
+  app.put(
+    "/drawings/:id",
+    optionalAuth,
+    asyncHandler(async (req, res) => {
+      const principal = await getRequestPrincipal(req);
+
+      const { id } = req.params;
+      const access = await getDrawingAccess({
+        prisma,
+        principal,
+        drawingId: id,
+      });
+      if (!canEditDrawing(access)) {
+        if (respondWithAuthErrorIfPresent(req, res)) return;
+        return res.status(404).json({
+          error: "Drawing not found",
+          message: "Drawing does not exist",
+        });
+      }
+
+      const existingDrawing = await prisma.drawing.findUnique({
+        where: { id },
+      });
+      if (!existingDrawing)
+        return res.status(404).json({ error: "Drawing not found" });
+
+      const parsed = drawingUpdateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        if (config.nodeEnv === "development") {
+          console.error("[API] Validation failed", {
+            id,
+            errors: parsed.error.issues,
+          });
+        }
+        return respondWithValidationErrors(res, parsed.error.issues);
+      }
+
+      const payload = parsed.data as {
+        name?: string;
+        collectionId?: string | null;
+        elements?: unknown[];
+        appState?: Record<string, unknown>;
+        preview?: string | null;
+        files?: Record<string, unknown>;
+        version?: number;
+      };
+      const ownerUserId = existingDrawing.userId;
+      const trashCollectionId = getUserTrashCollectionId(ownerUserId);
+      const isSceneUpdate =
+        payload.elements !== undefined ||
+        payload.appState !== undefined ||
+        payload.files !== undefined;
+      const data: Prisma.DrawingUpdateInput = isSceneUpdate
+        ? { version: { increment: 1 } }
+        : {};
+
+      if (payload.name !== undefined) data.name = payload.name;
+      if (payload.elements !== undefined)
+        data.elements = JSON.stringify(payload.elements);
+      if (payload.appState !== undefined)
+        data.appState = JSON.stringify(payload.appState);
+      if (payload.files !== undefined)
+        data.files = JSON.stringify(payload.files);
+      if (payload.preview !== undefined) data.preview = payload.preview;
+
+      if (payload.collectionId !== undefined) {
+        if (!isOwnerAccess(access)) {
+          return res.status(403).json({
+            error: "Forbidden",
+            message: "Only the owner can move drawings between collections",
+          });
+        }
+        if (payload.collectionId === "trash") {
+          await ensureTrashCollection(prisma, ownerUserId);
+          (data as Prisma.DrawingUncheckedUpdateInput).collectionId =
+            trashCollectionId;
+        } else if (payload.collectionId) {
+          const collection = await prisma.collection.findFirst({
+            where: { id: payload.collectionId, userId: ownerUserId },
+          });
+          if (!collection)
+            return res.status(404).json({ error: "Collection not found" });
+          (data as Prisma.DrawingUncheckedUpdateInput).collectionId =
+            payload.collectionId;
+        } else {
+          (data as Prisma.DrawingUncheckedUpdateInput).collectionId = null;
+        }
+      }
+
+      const updateWhere: Prisma.DrawingWhereInput = { id };
+      if (isSceneUpdate && payload.version !== undefined) {
+        updateWhere.version = payload.version;
+      }
+
+      const versionConflictError = new Error("VERSION_CONFLICT");
+      let updatedDrawing: typeof existingDrawing | null = null;
+
+      try {
+        if (isSceneUpdate) {
+          updatedDrawing = await prisma.$transaction(async (tx) => {
+            await tx.drawingSnapshot.create({
+              data: {
+                drawingId: id,
+                version: existingDrawing.version,
+                elements: existingDrawing.elements,
+                appState: existingDrawing.appState,
+                files: existingDrawing.files,
+              },
+            });
+
+            const updateResult = await tx.drawing.updateMany({
+              where: updateWhere,
+              data,
+            });
+            if (updateResult.count === 0) {
+              throw versionConflictError;
+            }
+
+            return tx.drawing.findFirst({ where: { id } });
+          });
+        } else {
+          const updateResult = await prisma.drawing.updateMany({
             where: updateWhere,
             data,
           });
           if (updateResult.count === 0) {
-            throw versionConflictError;
+            return res.status(404).json({ error: "Drawing not found" });
           }
-
-          return tx.drawing.findFirst({ where: { id } });
-        });
-      } else {
-        const updateResult = await prisma.drawing.updateMany({
-          where: updateWhere,
-          data,
-        });
-        if (updateResult.count === 0) {
-          return res.status(404).json({ error: "Drawing not found" });
-        }
-        updatedDrawing = await prisma.drawing.findFirst({
-          where: { id },
-        });
-      }
-    } catch (error) {
-      if (
-        error === versionConflictError ||
-        (error instanceof Error && error.message === versionConflictError.message)
-      ) {
-        const latestDrawing = await prisma.drawing.findFirst({
-          where: { id },
-          select: { version: true },
-        });
-        if (isSceneUpdate && payload.version !== undefined) {
-          return res.status(409).json({
-            error: "Conflict",
-            code: "VERSION_CONFLICT",
-            message: "Drawing has changed since this editor state was loaded.",
-            currentVersion: latestDrawing?.version ?? null,
+          updatedDrawing = await prisma.drawing.findFirst({
+            where: { id },
           });
         }
+      } catch (error) {
+        if (
+          error === versionConflictError ||
+          (error instanceof Error &&
+            error.message === versionConflictError.message)
+        ) {
+          const latestDrawing = await prisma.drawing.findFirst({
+            where: { id },
+            select: { version: true },
+          });
+          if (isSceneUpdate && payload.version !== undefined) {
+            return res.status(409).json({
+              error: "Conflict",
+              code: "VERSION_CONFLICT",
+              message:
+                "Drawing has changed since this editor state was loaded.",
+              currentVersion: latestDrawing?.version ?? null,
+            });
+          }
+        }
+        throw error;
       }
-      throw error;
-    }
-    if (!updatedDrawing) {
-      return res.status(404).json({ error: "Drawing not found" });
-    }
-    invalidateDrawingsCache();
+      if (!updatedDrawing) {
+        return res.status(404).json({ error: "Drawing not found" });
+      }
+      invalidateDrawingsCache();
 
-    return res.json({
-      ...updatedDrawing,
-      collectionId: toPublicTrashCollectionId(updatedDrawing.collectionId, ownerUserId),
-      elements: parseJsonField(updatedDrawing.elements, []),
-      appState: parseJsonField(updatedDrawing.appState, {}),
-      files: parseJsonField(updatedDrawing.files, {}),
-      accessLevel: access,
-    });
-  }));
-
-  app.delete("/drawings/:id", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-    const { id } = req.params;
-
-    const drawing = await prisma.drawing.findFirst({ where: { id, userId: req.user.id } });
-    if (!drawing) return res.status(404).json({ error: "Drawing not found" });
-
-    const deleteResult = await prisma.drawing.deleteMany({
-      where: { id, userId: req.user.id },
-    });
-    if (deleteResult.count === 0) {
-      return res.status(404).json({ error: "Drawing not found" });
-    }
-    invalidateDrawingsCache();
-
-    if (config.enableAuditLogging) {
-      await logAuditEvent({
-        userId: req.user.id,
-        action: "drawing_deleted",
-        resource: `drawing:${id}`,
-        ipAddress: req.ip || req.connection.remoteAddress || undefined,
-        userAgent: req.headers["user-agent"] || undefined,
-        details: { drawingId: id, drawingName: drawing.name },
+      return res.json({
+        ...updatedDrawing,
+        collectionId: toPublicTrashCollectionId(
+          updatedDrawing.collectionId,
+          ownerUserId,
+        ),
+        elements: parseJsonField(updatedDrawing.elements, []),
+        appState: parseJsonField(updatedDrawing.appState, {}),
+        files: parseJsonField(updatedDrawing.files, {}),
+        accessLevel: access,
       });
-    }
+    }),
+  );
 
-    return res.json({ success: true });
-  }));
+  app.delete(
+    "/drawings/:id",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+      const { id } = req.params;
 
-  app.post("/drawings/:id/duplicate", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+      const drawing = await prisma.drawing.findFirst({
+        where: { id, userId: req.user.id },
+      });
+      if (!drawing) return res.status(404).json({ error: "Drawing not found" });
 
-    const { id } = req.params;
-    const original = await prisma.drawing.findFirst({ where: { id, userId: req.user.id } });
-    if (!original) return res.status(404).json({ error: "Original drawing not found" });
-    let duplicatedCollectionId = original.collectionId;
-    if (isTrashCollectionId(original.collectionId, req.user.id)) {
-      await ensureTrashCollection(prisma, req.user.id);
-      duplicatedCollectionId = getUserTrashCollectionId(req.user.id);
-    }
+      const deleteResult = await prisma.drawing.deleteMany({
+        where: { id, userId: req.user.id },
+      });
+      if (deleteResult.count === 0) {
+        return res.status(404).json({ error: "Drawing not found" });
+      }
+      invalidateDrawingsCache();
 
-    const newDrawing = await prisma.drawing.create({
-      data: {
-        name: `${original.name} (Copy)`,
-        elements: original.elements,
-        appState: original.appState,
-        files: original.files,
-        userId: req.user.id,
-        collectionId: duplicatedCollectionId,
-        version: 1,
-      },
-    });
-    invalidateDrawingsCache();
+      if (config.enableAuditLogging) {
+        await logAuditEvent({
+          userId: req.user.id,
+          action: "drawing_deleted",
+          resource: `drawing:${id}`,
+          ipAddress: req.ip || req.connection.remoteAddress || undefined,
+          userAgent: req.headers["user-agent"] || undefined,
+          details: { drawingId: id, drawingName: drawing.name },
+        });
+      }
 
-    return res.json({
-      ...newDrawing,
-      collectionId: toPublicTrashCollectionId(newDrawing.collectionId, req.user.id),
-      elements: parseJsonField(newDrawing.elements, []),
-      appState: parseJsonField(newDrawing.appState, {}),
-      files: parseJsonField(newDrawing.files, {}),
-    });
-  }));
+      return res.json({ success: true });
+    }),
+  );
+
+  app.post(
+    "/drawings/:id/duplicate",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+
+      const { id } = req.params;
+      const original = await prisma.drawing.findFirst({
+        where: { id, userId: req.user.id },
+      });
+      if (!original)
+        return res.status(404).json({ error: "Original drawing not found" });
+      let duplicatedCollectionId = original.collectionId;
+      if (isTrashCollectionId(original.collectionId, req.user.id)) {
+        await ensureTrashCollection(prisma, req.user.id);
+        duplicatedCollectionId = getUserTrashCollectionId(req.user.id);
+      }
+
+      const newDrawing = await prisma.drawing.create({
+        data: {
+          name: `${original.name} (Copy)`,
+          elements: original.elements,
+          appState: original.appState,
+          files: original.files,
+          userId: req.user.id,
+          collectionId: duplicatedCollectionId,
+          version: 1,
+        },
+      });
+      invalidateDrawingsCache();
+
+      return res.json({
+        ...newDrawing,
+        collectionId: toPublicTrashCollectionId(
+          newDrawing.collectionId,
+          req.user.id,
+        ),
+        elements: parseJsonField(newDrawing.elements, []),
+        appState: parseJsonField(newDrawing.appState, {}),
+        files: parseJsonField(newDrawing.files, {}),
+      });
+    }),
+  );
 
   // Owner-only: resolve users by name/email in the context of a drawing you own (reduces enumeration risk).
-  app.get("/drawings/:id/share-resolve", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+  app.get(
+    "/drawings/:id/share-resolve",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
-    const { id } = req.params;
-    const qRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
-    const q = qRaw.toLowerCase();
-    if (q.length < 3) return res.json({ users: [] });
+      const { id } = req.params;
+      const qRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+      const q = qRaw.toLowerCase();
+      if (q.length < 3) return res.json({ users: [] });
 
-    const drawing = await prisma.drawing.findUnique({ where: { id }, select: { userId: true } });
-    if (!drawing || drawing.userId !== req.user.id) {
-      return res.status(404).json({ error: "Drawing not found" });
-    }
+      const drawing = await prisma.drawing.findUnique({
+        where: { id },
+        select: { userId: true },
+      });
+      if (!drawing || drawing.userId !== req.user.id) {
+        return res.status(404).json({ error: "Drawing not found" });
+      }
 
-    const users = await prisma.user.findMany({
-      where: {
-        isActive: true,
-        id: { not: req.user.id },
-        OR: [
-          { email: { contains: q } },
-          { name: { contains: q } },
-          { username: { contains: q } },
-        ],
-      },
-      select: { id: true, name: true, email: true },
-      take: 10,
-    });
+      const users = await prisma.user.findMany({
+        where: {
+          isActive: true,
+          id: { not: req.user.id },
+          OR: [
+            { email: { contains: q } },
+            { name: { contains: q } },
+            { username: { contains: q } },
+          ],
+        },
+        select: { id: true, name: true, email: true },
+        take: 10,
+      });
 
-    return res.json({ users });
-  }));
+      return res.json({ users });
+    }),
+  );
 
-  app.get("/drawings/:id/sharing", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-    const { id } = req.params;
+  app.get(
+    "/drawings/:id/sharing",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+      const { id } = req.params;
 
-    const drawing = await prisma.drawing.findUnique({ where: { id }, select: { userId: true } });
-    if (!drawing || drawing.userId !== req.user.id) {
-      return res.status(404).json({ error: "Drawing not found" });
-    }
+      const drawing = await prisma.drawing.findUnique({
+        where: { id },
+        select: { userId: true },
+      });
+      if (!drawing || drawing.userId !== req.user.id) {
+        return res.status(404).json({ error: "Drawing not found" });
+      }
 
-    const [permissions, linkShares] = await Promise.all([
-      prisma.drawingPermission.findMany({
-        where: { drawingId: id },
+      const [permissions, linkShares] = await Promise.all([
+        prisma.drawingPermission.findMany({
+          where: { drawingId: id },
+          select: {
+            id: true,
+            granteeUserId: true,
+            permission: true,
+            createdAt: true,
+            updatedAt: true,
+            granteeUser: { select: { id: true, name: true, email: true } },
+          },
+          orderBy: { createdAt: "desc" },
+        }),
+        prisma.drawingLinkShare.findMany({
+          where: { drawingId: id },
+          select: {
+            id: true,
+            permission: true,
+            expiresAt: true,
+            revokedAt: true,
+            createdAt: true,
+            updatedAt: true,
+            lastUsedAt: true,
+          },
+          orderBy: { createdAt: "desc" },
+        }),
+      ]);
+
+      return res.json({ permissions, linkShares });
+    }),
+  );
+
+  app.post(
+    "/drawings/:id/permissions",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+      const { id } = req.params;
+
+      const drawing = await prisma.drawing.findUnique({
+        where: { id },
+        select: { userId: true },
+      });
+      if (!drawing || drawing.userId !== req.user.id) {
+        return res.status(404).json({ error: "Drawing not found" });
+      }
+
+      const granteeUserId =
+        typeof req.body?.granteeUserId === "string"
+          ? req.body.granteeUserId
+          : null;
+      const permission = normalizeDrawingPermission(req.body?.permission);
+      if (!granteeUserId || !permission) {
+        return res.status(400).json({
+          error: "Validation error",
+          message: "Invalid grantee or permission",
+        });
+      }
+      if (granteeUserId === req.user.id) {
+        return res.status(400).json({
+          error: "Validation error",
+          message: "Cannot share with yourself",
+        });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { id: granteeUserId },
+        select: { id: true, isActive: true },
+      });
+      if (!user || !user.isActive) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const saved = await prisma.drawingPermission.upsert({
+        where: {
+          drawingId_granteeUserId: { drawingId: id, granteeUserId },
+        },
+        update: { permission, createdByUserId: req.user.id },
+        create: {
+          drawingId: id,
+          granteeUserId,
+          permission,
+          createdByUserId: req.user.id,
+        },
         select: {
           id: true,
           granteeUserId: true,
@@ -679,221 +937,198 @@ export const registerDrawingRoutes = (
           updatedAt: true,
           granteeUser: { select: { id: true, name: true, email: true } },
         },
-        orderBy: { createdAt: "desc" },
-      }),
-      prisma.drawingLinkShare.findMany({
-        where: { drawingId: id },
+      });
+
+      invalidateDrawingsCache();
+
+      if (config.enableAuditLogging) {
+        await logAuditEvent({
+          userId: req.user.id,
+          action: "drawing_shared_user_upsert",
+          resource: `drawing:${id}`,
+          ipAddress: req.ip || req.connection.remoteAddress || undefined,
+          userAgent: req.headers["user-agent"] || undefined,
+          details: { drawingId: id, granteeUserId, permission },
+        });
+      }
+
+      return res.json({ permission: saved });
+    }),
+  );
+
+  app.delete(
+    "/drawings/:id/permissions/:permId",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+      const { id, permId } = req.params;
+
+      const drawing = await prisma.drawing.findUnique({
+        where: { id },
+        select: { userId: true },
+      });
+      if (!drawing || drawing.userId !== req.user.id) {
+        return res.status(404).json({ error: "Drawing not found" });
+      }
+
+      await prisma.drawingPermission.deleteMany({
+        where: { id: permId, drawingId: id },
+      });
+      invalidateDrawingsCache();
+
+      if (config.enableAuditLogging) {
+        await logAuditEvent({
+          userId: req.user.id,
+          action: "drawing_shared_user_revoke",
+          resource: `drawing:${id}`,
+          ipAddress: req.ip || req.connection.remoteAddress || undefined,
+          userAgent: req.headers["user-agent"] || undefined,
+          details: { drawingId: id, permissionId: permId },
+        });
+      }
+
+      return res.json({ success: true });
+    }),
+  );
+
+  app.post(
+    "/drawings/:id/link-shares",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+      const { id } = req.params;
+
+      const drawing = await prisma.drawing.findUnique({
+        where: { id },
+        select: { userId: true },
+      });
+      if (!drawing || drawing.userId !== req.user.id) {
+        return res.status(404).json({ error: "Drawing not found" });
+      }
+
+      const permission = normalizeDrawingPermission(req.body?.permission);
+      if (!permission) {
+        return res
+          .status(400)
+          .json({ error: "Validation error", message: "Invalid permission" });
+      }
+
+      const rawExpiresAt =
+        typeof req.body?.expiresAt === "string" ? req.body.expiresAt : null;
+      const expiresAtText = (rawExpiresAt || "").trim();
+      const requestedExpiresAt =
+        expiresAtText.length > 0 ? new Date(expiresAtText) : null;
+      const hasValidRequestedExpiry = Boolean(
+        requestedExpiresAt && Number.isFinite(requestedExpiresAt.getTime()),
+      );
+
+      const now = Date.now();
+      const maxTtlMs = resolveMaxTtlMs();
+      const defaultTtlMs = resolveDefaultTtlMs(permission);
+
+      let expiresAt: Date | null = null;
+      // View links can be truly non-expiring unless an explicit expiry is provided.
+      // Edit links default to an expiry window when none is provided.
+      if (
+        permission === "view" &&
+        !hasValidRequestedExpiry &&
+        expiresAtText.length === 0
+      ) {
+        expiresAt = null;
+      } else {
+        const candidateTtlMs =
+          hasValidRequestedExpiry && requestedExpiresAt
+            ? requestedExpiresAt.getTime() - now
+            : defaultTtlMs;
+        const ttlMs = Math.min(Math.max(candidateTtlMs, 60_000), maxTtlMs);
+        expiresAt = new Date(now + ttlMs);
+      }
+
+      // Passphrase support is currently disabled. We keep passphraseHash nullable for backwards compatibility.
+      const passphraseHashValue: string | null = null;
+
+      // Enforce a single active "anyone with the link" policy per drawing. The public link is the drawing id,
+      // so multiple active link-share rows would be confusing and could unintentionally widen access.
+      await prisma.drawingLinkShare.updateMany({
+        where: { drawingId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+
+      // Token is generated only to satisfy the current schema's tokenHash requirement.
+      // Link access is based on drawing id + active policy (no secret token in the URL).
+      const tokenHash = hashShareLinkToken(buildShareLinkToken());
+
+      const created = await prisma.drawingLinkShare.create({
+        data: {
+          drawingId: id,
+          permission,
+          tokenHash,
+          passphraseHash: passphraseHashValue,
+          expiresAt,
+          createdByUserId: req.user.id,
+        },
         select: {
           id: true,
           permission: true,
           expiresAt: true,
           revokedAt: true,
           createdAt: true,
-          updatedAt: true,
-          lastUsedAt: true,
         },
-        orderBy: { createdAt: "desc" },
-      }),
-    ]);
-
-    return res.json({ permissions, linkShares });
-  }));
-
-  app.post("/drawings/:id/permissions", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-    const { id } = req.params;
-
-    const drawing = await prisma.drawing.findUnique({ where: { id }, select: { userId: true } });
-    if (!drawing || drawing.userId !== req.user.id) {
-      return res.status(404).json({ error: "Drawing not found" });
-    }
-
-    const granteeUserId = typeof req.body?.granteeUserId === "string" ? req.body.granteeUserId : null;
-    const permission = normalizeDrawingPermission(req.body?.permission);
-    if (!granteeUserId || !permission) {
-      return res.status(400).json({ error: "Validation error", message: "Invalid grantee or permission" });
-    }
-    if (granteeUserId === req.user.id) {
-      return res.status(400).json({ error: "Validation error", message: "Cannot share with yourself" });
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: granteeUserId },
-      select: { id: true, isActive: true },
-    });
-    if (!user || !user.isActive) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const saved = await prisma.drawingPermission.upsert({
-      where: {
-        drawingId_granteeUserId: { drawingId: id, granteeUserId },
-      },
-      update: { permission, createdByUserId: req.user.id },
-      create: { drawingId: id, granteeUserId, permission, createdByUserId: req.user.id },
-      select: {
-        id: true,
-        granteeUserId: true,
-        permission: true,
-        createdAt: true,
-        updatedAt: true,
-        granteeUser: { select: { id: true, name: true, email: true } },
-      },
-    });
-
-    invalidateDrawingsCache();
-
-    if (config.enableAuditLogging) {
-      await logAuditEvent({
-        userId: req.user.id,
-        action: "drawing_shared_user_upsert",
-        resource: `drawing:${id}`,
-        ipAddress: req.ip || req.connection.remoteAddress || undefined,
-        userAgent: req.headers["user-agent"] || undefined,
-        details: { drawingId: id, granteeUserId, permission },
       });
-    }
 
-    return res.json({ permission: saved });
-  }));
+      if (config.enableAuditLogging) {
+        await logAuditEvent({
+          userId: req.user.id,
+          action: "drawing_link_share_created",
+          resource: `drawing:${id}`,
+          ipAddress: req.ip || req.connection.remoteAddress || undefined,
+          userAgent: req.headers["user-agent"] || undefined,
+          details: {
+            drawingId: id,
+            permission,
+            expiresAt: expiresAt ? expiresAt.toISOString() : null,
+          },
+        });
+      }
 
-  app.delete("/drawings/:id/permissions/:permId", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-    const { id, permId } = req.params;
+      return res.json({ share: created });
+    }),
+  );
 
-    const drawing = await prisma.drawing.findUnique({ where: { id }, select: { userId: true } });
-    if (!drawing || drawing.userId !== req.user.id) {
-      return res.status(404).json({ error: "Drawing not found" });
-    }
+  app.delete(
+    "/drawings/:id/link-shares/:shareId",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+      const { id, shareId } = req.params;
 
-    await prisma.drawingPermission.deleteMany({
-      where: { id: permId, drawingId: id },
-    });
-    invalidateDrawingsCache();
-
-    if (config.enableAuditLogging) {
-      await logAuditEvent({
-        userId: req.user.id,
-        action: "drawing_shared_user_revoke",
-        resource: `drawing:${id}`,
-        ipAddress: req.ip || req.connection.remoteAddress || undefined,
-        userAgent: req.headers["user-agent"] || undefined,
-        details: { drawingId: id, permissionId: permId },
+      const drawing = await prisma.drawing.findUnique({
+        where: { id },
+        select: { userId: true },
       });
-    }
+      if (!drawing || drawing.userId !== req.user.id) {
+        return res.status(404).json({ error: "Drawing not found" });
+      }
 
-    return res.json({ success: true });
-  }));
-
-  app.post("/drawings/:id/link-shares", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-    const { id } = req.params;
-
-    const drawing = await prisma.drawing.findUnique({ where: { id }, select: { userId: true } });
-    if (!drawing || drawing.userId !== req.user.id) {
-      return res.status(404).json({ error: "Drawing not found" });
-    }
-
-    const permission = normalizeDrawingPermission(req.body?.permission);
-    if (!permission) {
-      return res.status(400).json({ error: "Validation error", message: "Invalid permission" });
-    }
-
-    const rawExpiresAt = typeof req.body?.expiresAt === "string" ? req.body.expiresAt : null;
-    const expiresAtText = (rawExpiresAt || "").trim();
-    const requestedExpiresAt = expiresAtText.length > 0 ? new Date(expiresAtText) : null;
-    const hasValidRequestedExpiry = Boolean(requestedExpiresAt && Number.isFinite(requestedExpiresAt.getTime()));
-
-    const now = Date.now();
-    const maxTtlMs = resolveMaxTtlMs();
-    const defaultTtlMs = resolveDefaultTtlMs(permission);
-
-    let expiresAt: Date | null = null;
-    // View links can be truly non-expiring unless an explicit expiry is provided.
-    // Edit links default to an expiry window when none is provided.
-    if (permission === "view" && !hasValidRequestedExpiry && expiresAtText.length === 0) {
-      expiresAt = null;
-    } else {
-      const candidateTtlMs = hasValidRequestedExpiry && requestedExpiresAt
-        ? requestedExpiresAt.getTime() - now
-        : defaultTtlMs;
-      const ttlMs = Math.min(Math.max(candidateTtlMs, 60_000), maxTtlMs);
-      expiresAt = new Date(now + ttlMs);
-    }
-
-    // Passphrase support is currently disabled. We keep passphraseHash nullable for backwards compatibility.
-    const passphraseHashValue: string | null = null;
-
-    // Enforce a single active "anyone with the link" policy per drawing. The public link is the drawing id,
-    // so multiple active link-share rows would be confusing and could unintentionally widen access.
-    await prisma.drawingLinkShare.updateMany({
-      where: { drawingId: id, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-
-    // Token is generated only to satisfy the current schema's tokenHash requirement.
-    // Link access is based on drawing id + active policy (no secret token in the URL).
-    const tokenHash = hashShareLinkToken(buildShareLinkToken());
-
-    const created = await prisma.drawingLinkShare.create({
-      data: {
-        drawingId: id,
-        permission,
-        tokenHash,
-        passphraseHash: passphraseHashValue,
-        expiresAt,
-        createdByUserId: req.user.id,
-      },
-      select: {
-        id: true,
-        permission: true,
-        expiresAt: true,
-        revokedAt: true,
-        createdAt: true,
-      },
-    });
-
-    if (config.enableAuditLogging) {
-      await logAuditEvent({
-        userId: req.user.id,
-        action: "drawing_link_share_created",
-        resource: `drawing:${id}`,
-        ipAddress: req.ip || req.connection.remoteAddress || undefined,
-        userAgent: req.headers["user-agent"] || undefined,
-        details: { drawingId: id, permission, expiresAt: expiresAt ? expiresAt.toISOString() : null },
+      await prisma.drawingLinkShare.updateMany({
+        where: { id: shareId, drawingId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
       });
-    }
 
-    return res.json({ share: created });
-  }));
+      if (config.enableAuditLogging) {
+        await logAuditEvent({
+          userId: req.user.id,
+          action: "drawing_link_share_revoked",
+          resource: `drawing:${id}`,
+          ipAddress: req.ip || req.connection.remoteAddress || undefined,
+          userAgent: req.headers["user-agent"] || undefined,
+          details: { drawingId: id, shareId },
+        });
+      }
 
-  app.delete("/drawings/:id/link-shares/:shareId", requireAuth, asyncHandler(async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-    const { id, shareId } = req.params;
-
-    const drawing = await prisma.drawing.findUnique({ where: { id }, select: { userId: true } });
-    if (!drawing || drawing.userId !== req.user.id) {
-      return res.status(404).json({ error: "Drawing not found" });
-    }
-
-    await prisma.drawingLinkShare.updateMany({
-      where: { id: shareId, drawingId: id, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-
-    if (config.enableAuditLogging) {
-      await logAuditEvent({
-        userId: req.user.id,
-        action: "drawing_link_share_revoked",
-        resource: `drawing:${id}`,
-        ipAddress: req.ip || req.connection.remoteAddress || undefined,
-        userAgent: req.headers["user-agent"] || undefined,
-        details: { drawingId: id, shareId },
-      });
-    }
-
-    return res.json({ success: true });
-  }));
+      return res.json({ success: true });
+    }),
+  );
 
   // Legacy share-token exchange endpoint removed: link access is based on drawing id + active policy.
 
@@ -902,102 +1137,130 @@ export const registerDrawingRoutes = (
   // ============================================================
 
   // List snapshots (metadata only)
-  app.get("/drawings/:id/history", optionalAuth, asyncHandler(async (req, res) => {
-    const principal = await getRequestPrincipal(req);
-    const { id } = req.params;
-    const access = await getDrawingAccess({ prisma, principal, drawingId: id });
-    if (!canViewDrawing(access)) {
-      if (respondWithAuthErrorIfPresent(req, res)) return;
-      return res.status(404).json({ error: "Drawing not found" });
-    }
+  app.get(
+    "/drawings/:id/history",
+    optionalAuth,
+    asyncHandler(async (req, res) => {
+      const principal = await getRequestPrincipal(req);
+      const { id } = req.params;
+      const access = await getDrawingAccess({
+        prisma,
+        principal,
+        drawingId: id,
+      });
+      if (!canViewDrawing(access)) {
+        if (respondWithAuthErrorIfPresent(req, res)) return;
+        return res.status(404).json({ error: "Drawing not found" });
+      }
 
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-    const offset = parseInt(req.query.offset as string) || 0;
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+      const offset = parseInt(req.query.offset as string) || 0;
 
-    const [snapshots, totalCount] = await Promise.all([
-      prisma.drawingSnapshot.findMany({
-        where: { drawingId: id },
-        select: { id: true, version: true, createdAt: true },
-        orderBy: { createdAt: "desc" },
-        take: limit,
-        skip: offset,
-      }),
-      prisma.drawingSnapshot.count({ where: { drawingId: id } }),
-    ]);
+      const [snapshots, totalCount] = await Promise.all([
+        prisma.drawingSnapshot.findMany({
+          where: { drawingId: id },
+          select: { id: true, version: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: limit,
+          skip: offset,
+        }),
+        prisma.drawingSnapshot.count({ where: { drawingId: id } }),
+      ]);
 
-    return res.json({ snapshots, totalCount });
-  }));
+      return res.json({ snapshots, totalCount });
+    }),
+  );
 
   // Get full snapshot for preview
-  app.get("/drawings/:id/history/:snapshotId", optionalAuth, asyncHandler(async (req, res) => {
-    const principal = await getRequestPrincipal(req);
-    const { id, snapshotId } = req.params;
-    const access = await getDrawingAccess({ prisma, principal, drawingId: id });
-    if (!canViewDrawing(access)) {
-      if (respondWithAuthErrorIfPresent(req, res)) return;
-      return res.status(404).json({ error: "Drawing not found" });
-    }
+  app.get(
+    "/drawings/:id/history/:snapshotId",
+    optionalAuth,
+    asyncHandler(async (req, res) => {
+      const principal = await getRequestPrincipal(req);
+      const { id, snapshotId } = req.params;
+      const access = await getDrawingAccess({
+        prisma,
+        principal,
+        drawingId: id,
+      });
+      if (!canViewDrawing(access)) {
+        if (respondWithAuthErrorIfPresent(req, res)) return;
+        return res.status(404).json({ error: "Drawing not found" });
+      }
 
-    const snapshot = await prisma.drawingSnapshot.findFirst({
-      where: { id: snapshotId, drawingId: id },
-    });
-    if (!snapshot) return res.status(404).json({ error: "Snapshot not found" });
+      const snapshot = await prisma.drawingSnapshot.findFirst({
+        where: { id: snapshotId, drawingId: id },
+      });
+      if (!snapshot)
+        return res.status(404).json({ error: "Snapshot not found" });
 
-    return res.json({
-      ...snapshot,
-      elements: parseJsonField(snapshot.elements, []),
-      appState: parseJsonField(snapshot.appState, {}),
-      files: parseJsonField(snapshot.files, {}),
-    });
-  }));
+      return res.json({
+        ...snapshot,
+        elements: parseJsonField(snapshot.elements, []),
+        appState: parseJsonField(snapshot.appState, {}),
+        files: parseJsonField(snapshot.files, {}),
+      });
+    }),
+  );
 
   // Restore a snapshot (snapshots current state first, then applies old state)
-  app.post("/drawings/:id/history/:snapshotId/restore", optionalAuth, asyncHandler(async (req, res) => {
-    const principal = await getRequestPrincipal(req);
-    const { id, snapshotId } = req.params;
-    const access = await getDrawingAccess({ prisma, principal, drawingId: id });
-    if (!canEditDrawing(access)) {
-      if (respondWithAuthErrorIfPresent(req, res)) return;
-      return res.status(404).json({ error: "Drawing not found" });
-    }
-
-    const [drawing, snapshot] = await Promise.all([
-      prisma.drawing.findUnique({ where: { id } }),
-      prisma.drawingSnapshot.findFirst({ where: { id: snapshotId, drawingId: id } }),
-    ]);
-    if (!drawing) return res.status(404).json({ error: "Drawing not found" });
-    if (!snapshot) return res.status(404).json({ error: "Snapshot not found" });
-
-    // Snapshot current state before restoring (so restore is reversible)
-    await prisma.drawingSnapshot.create({
-      data: {
+  app.post(
+    "/drawings/:id/history/:snapshotId/restore",
+    optionalAuth,
+    asyncHandler(async (req, res) => {
+      const principal = await getRequestPrincipal(req);
+      const { id, snapshotId } = req.params;
+      const access = await getDrawingAccess({
+        prisma,
+        principal,
         drawingId: id,
-        version: drawing.version,
-        elements: drawing.elements,
-        appState: drawing.appState,
-        files: drawing.files,
-      },
-    });
+      });
+      if (!canEditDrawing(access)) {
+        if (respondWithAuthErrorIfPresent(req, res)) return;
+        return res.status(404).json({ error: "Drawing not found" });
+      }
 
-    // Apply snapshot
-    const updated = await prisma.drawing.update({
-      where: { id },
-      data: {
-        elements: snapshot.elements,
-        appState: snapshot.appState,
-        files: snapshot.files,
-        version: { increment: 1 },
-      },
-    });
+      const [drawing, snapshot] = await Promise.all([
+        prisma.drawing.findUnique({ where: { id } }),
+        prisma.drawingSnapshot.findFirst({
+          where: { id: snapshotId, drawingId: id },
+        }),
+      ]);
+      if (!drawing) return res.status(404).json({ error: "Drawing not found" });
+      if (!snapshot)
+        return res.status(404).json({ error: "Snapshot not found" });
 
-    invalidateDrawingsCache();
+      // Snapshot current state before restoring (so restore is reversible)
+      await prisma.drawingSnapshot.create({
+        data: {
+          drawingId: id,
+          version: drawing.version,
+          elements: drawing.elements,
+          appState: drawing.appState,
+          files: drawing.files,
+        },
+      });
 
-    return res.json({
-      ...updated,
-      elements: parseJsonField(updated.elements, []),
-      appState: parseJsonField(updated.appState, {}),
-      files: parseJsonField(updated.files, {}),
-      accessLevel: access,
-    });
-  }));
+      // Apply snapshot
+      const updated = await prisma.drawing.update({
+        where: { id },
+        data: {
+          elements: snapshot.elements,
+          appState: snapshot.appState,
+          files: snapshot.files,
+          version: { increment: 1 },
+        },
+      });
+
+      invalidateDrawingsCache();
+
+      return res.json({
+        ...updated,
+        elements: parseJsonField(updated.elements, []),
+        appState: parseJsonField(updated.appState, {}),
+        files: parseJsonField(updated.files, {}),
+        accessLevel: access,
+      });
+    }),
+  );
 };
