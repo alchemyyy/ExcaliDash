@@ -31,6 +31,10 @@ type RegisterOidcRoutesDeps = {
   router: express.Router;
   prisma: PrismaClient;
   ensureAuthEnabled: (res: Response) => Promise<boolean>;
+  ensureSystemConfig: () => Promise<{
+    id: string;
+    oidcJitProvisioningEnabled: boolean | null;
+  }>;
   sanitizeText: (input: unknown, maxLength?: number) => string;
   generateTokens: (
     userId: string,
@@ -57,6 +61,7 @@ type RegisterOidcRoutesDeps = {
       clientId: string | null;
       clientSecret: string | null;
       redirectUri: string | null;
+      idTokenSignedResponseAlg: string | null;
       scopes: string;
       emailClaim: string;
       emailVerifiedClaim: string;
@@ -79,6 +84,23 @@ const requestUsesHttps = (req: Request): boolean => {
 };
 
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
+
+const resolveIdTokenSignedResponseAlg = (
+  configuredAlg: string | null,
+  issuerMetadata: { id_token_signing_alg_values_supported?: unknown }
+): string => {
+  if (configuredAlg) return configuredAlg;
+
+  const advertised = issuerMetadata.id_token_signing_alg_values_supported;
+  if (Array.isArray(advertised)) {
+    const first = advertised.find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0
+    );
+    if (first) return first;
+  }
+
+  return "RS256";
+};
 
 const sanitizeReturnTo = (rawValue: unknown): string => {
   if (typeof rawValue !== "string") return "/";
@@ -188,7 +210,7 @@ const getOidcErrorMessage = (errorCode: string): string => {
     case "account_inactive":
       return "Your account is inactive.";
     case "provisioning_disabled":
-      return "No account found and automatic provisioning is disabled.";
+      return "No account found. Ask an admin to create your account or enable OIDC auto-provisioning.";
     case "callback_failed":
       return "OIDC callback validation failed.";
     default:
@@ -201,6 +223,7 @@ export const registerOidcRoutes = (deps: RegisterOidcRoutesDeps) => {
     router,
     prisma,
     ensureAuthEnabled,
+    ensureSystemConfig,
     sanitizeText,
     generateTokens,
     setAuthCookies,
@@ -259,12 +282,17 @@ export const registerOidcRoutes = (deps: RegisterOidcRoutesDeps) => {
           hasClientSecret: Boolean(config.oidc.clientSecret),
           supported: supportedMethods,
         });
+        const idTokenSignedResponseAlg = resolveIdTokenSignedResponseAlg(
+          config.oidc.idTokenSignedResponseAlg,
+          (issuer as any)?.metadata ?? {}
+        );
 
         const clientConfig: Record<string, unknown> = {
           client_id: config.oidc.clientId as string,
           redirect_uris: [config.oidc.redirectUri as string],
           response_types: ["code"],
           token_endpoint_auth_method: tokenEndpointAuthMethod,
+          id_token_signed_response_alg: idTokenSignedResponseAlg,
         };
 
         if (config.oidc.clientSecret) {
@@ -440,6 +468,11 @@ export const registerOidcRoutes = (deps: RegisterOidcRoutesDeps) => {
         return redirectToLoginWithError(req, res, "missing_email", flow.returnTo);
       }
       const normalizedEmail = normalizeEmail(rawEmail);
+      const systemConfig = await ensureSystemConfig();
+      const jitProvisioningEnabled =
+        typeof systemConfig.oidcJitProvisioningEnabled === "boolean"
+          ? systemConfig.oidcJitProvisioningEnabled
+          : config.oidc.jitProvisioning;
 
       const emailVerified = readBooleanClaim(claims, config.oidc.emailVerifiedClaim);
       if (config.oidc.requireEmailVerified && emailVerified !== true) {
@@ -484,7 +517,7 @@ export const registerOidcRoutes = (deps: RegisterOidcRoutesDeps) => {
         if (existingUser) {
           resolvedUser = existingUser;
         } else {
-          if (!config.oidc.jitProvisioning) {
+          if (!jitProvisioningEnabled) {
             throw new Error("OIDC provisioning disabled");
           }
 

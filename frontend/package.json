@@ -1,11 +1,11 @@
 {
   "name": "frontend",
   "private": true,
-  "version": "0.4.27",
+  "version": "0.4.28",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 6767",
-    "build": "tsc -b && vite build",
+    "dev": "node scripts/copy-excalidraw-assets.mjs --public && vite --port 6767",
+    "build": "tsc -b && vite build && node scripts/copy-excalidraw-assets.mjs --dist",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
@@ -19,7 +19,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@excalidraw/excalidraw": "0.17.6",
     "@types/lodash": "^4.17.20",
-    "axios": "^1.13.2",
+    "axios": "^1.13.5",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "jszip": "^3.10.1",

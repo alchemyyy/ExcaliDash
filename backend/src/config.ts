@@ -23,6 +23,7 @@ interface Config {
   enablePasswordReset: boolean;
   enableRefreshTokenRotation: boolean;
   enableAuditLogging: boolean;
+  enforceHttpsRedirect: boolean;
   bootstrapSetupCodeTtlMs: number;
   bootstrapSetupCodeMaxAttempts: number;
 }
@@ -37,6 +38,7 @@ interface OidcConfig {
   clientId: string | null;
   clientSecret: string | null;
   redirectUri: string | null;
+  idTokenSignedResponseAlg: string | null;
   scopes: string;
   emailClaim: string;
   emailVerifiedClaim: string;
@@ -44,6 +46,22 @@ interface OidcConfig {
   jitProvisioning: boolean;
   firstUserAdmin: boolean;
 }
+
+const ALLOWED_OIDC_ID_TOKEN_ALGS = new Set([
+  "RS256",
+  "RS384",
+  "RS512",
+  "PS256",
+  "PS384",
+  "PS512",
+  "ES256",
+  "ES384",
+  "ES512",
+  "EdDSA",
+  "HS256",
+  "HS384",
+  "HS512",
+]);
 
 const getOptionalEnv = (key: string, defaultValue: string): string => {
   return process.env[key] || defaultValue;
@@ -54,6 +72,23 @@ const getOptionalTrimmedEnv = (key: string): string | null => {
   if (!raw) return null;
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : null;
+};
+
+const getOptionalOidcSigningAlg = (key: string): string | null => {
+  const raw = process.env[key];
+  if (!raw) return null;
+  const normalized = raw.trim();
+
+  if (normalized.length === 0 || normalized.toLowerCase() === "none") {
+    throw new Error(`${key} must not be empty or 'none'`);
+  }
+  if (!ALLOWED_OIDC_ID_TOKEN_ALGS.has(normalized)) {
+    throw new Error(
+      `${key} must be one of: ${Array.from(ALLOWED_OIDC_ID_TOKEN_ALGS).join(", ")}`
+    );
+  }
+
+  return normalized;
 };
 
 const resolveJwtSecret = (nodeEnv: string): string => {
@@ -164,6 +199,15 @@ const resolveOidcConfig = (authMode: AuthMode): OidcConfig => {
     }
   }
 
+  const idTokenSignedResponseAlg = enabled
+    ? getOptionalOidcSigningAlg("OIDC_ID_TOKEN_SIGNED_RESPONSE_ALG")
+    : null;
+  if (enabled && idTokenSignedResponseAlg && /^HS/i.test(idTokenSignedResponseAlg) && !clientSecret) {
+    throw new Error(
+      "OIDC_ID_TOKEN_SIGNED_RESPONSE_ALG using HS* requires OIDC_CLIENT_SECRET for a confidential client"
+    );
+  }
+
   return {
     enabled,
     enforced: authMode === "oidc_enforced",
@@ -172,6 +216,7 @@ const resolveOidcConfig = (authMode: AuthMode): OidcConfig => {
     clientId,
     clientSecret,
     redirectUri,
+    idTokenSignedResponseAlg,
     scopes: getOptionalEnv("OIDC_SCOPES", "openid profile email"),
     emailClaim: getOptionalEnv("OIDC_EMAIL_CLAIM", "email"),
     emailVerifiedClaim: getOptionalEnv("OIDC_EMAIL_VERIFIED_CLAIM", "email_verified"),
@@ -199,6 +244,7 @@ export const config: Config = {
   enablePasswordReset: getOptionalBoolean("ENABLE_PASSWORD_RESET", false),
   enableRefreshTokenRotation: getOptionalBoolean("ENABLE_REFRESH_TOKEN_ROTATION", true),
   enableAuditLogging: getOptionalBoolean("ENABLE_AUDIT_LOGGING", false),
+  enforceHttpsRedirect: getOptionalBoolean("ENFORCE_HTTPS_REDIRECT", true),
   bootstrapSetupCodeTtlMs: getRequiredEnvNumber("BOOTSTRAP_SETUP_CODE_TTL_MS", 15 * 60 * 1000),
   bootstrapSetupCodeMaxAttempts: getRequiredEnvNumber("BOOTSTRAP_SETUP_CODE_MAX_ATTEMPTS", 10),
 };

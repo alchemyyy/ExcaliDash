@@ -182,11 +182,12 @@ docker compose up -d
 
 When running ExcaliDash behind Traefik, Nginx, or another reverse proxy, configure both containers so that API + WebSocket calls resolve correctly:
 
-| Variable       | Purpose                                                                                                                                                                   |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FRONTEND_URL` | Backend allowed origin(s). Must match the public URL users access (for example `https://excalidash.example.com`). Supports comma-separated values for multiple addresses. |
-| `TRUST_PROXY`  | Set to `1` when traffic passes through one trusted reverse-proxy hop (for example frontend nginx -> backend) and headers are sanitized.                                   |
-| `BACKEND_URL`  | Frontend container-to-backend target used by Nginx. Override when backend host differs from default service DNS/host.                                                     |
+| Variable                 | Purpose                                                                                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FRONTEND_URL`           | Backend allowed origin(s). Must match the public URL users access (for example `https://excalidash.example.com`). Supports comma-separated values for multiple addresses. |
+| `TRUST_PROXY`            | Set to `1` when traffic passes through one trusted reverse-proxy hop (for example frontend nginx -> backend) and headers are sanitized.                                   |
+| `BACKEND_URL`            | Frontend container-to-backend target used by Nginx. Override when backend host differs from default service DNS/host.                                                     |
+| `ENFORCE_HTTPS_REDIRECT` | When `FRONTEND_URL` uses `https://`, the backend automatically redirects plain-HTTP requests to HTTPS. Set to `false` if your outer gateway already enforces HTTPS and you want to disable the built-in redirect (avoids redirect loops when `X-Forwarded-Proto` is not forwarded). Default: `true`. |
 
 ```yaml
 # docker-compose.yml example
@@ -198,6 +199,9 @@ backend:
     - TRUST_PROXY=1
     # Or multiple URLs (comma-separated) for local + network access
     # - FRONTEND_URL=http://localhost:6767,http://192.168.1.100:6767,http://nas.local:6767
+    # If your outer gateway enforces HTTPS and X-Forwarded-Proto is not forwarded,
+    # disable the built-in redirect to prevent redirect loops:
+    # - ENFORCE_HTTPS_REDIRECT=false
 frontend:
   environment:
     # For standard Docker Compose (default)
@@ -273,6 +277,8 @@ backend:
     - OIDC_CLIENT_ID=your-client-id
     # Optional for public clients; required for confidential clients
     # - OIDC_CLIENT_SECRET=your-client-secret
+    # Optional override when your IdP client is configured for a non-default ID token alg
+    # - OIDC_ID_TOKEN_SIGNED_RESPONSE_ALG=HS256
     - OIDC_REDIRECT_URI=https://excalidash.example.com/api/auth/oidc/callback
     - OIDC_SCOPES=openid profile email
 ```
@@ -283,6 +289,7 @@ Notes:
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | OIDC-only (`oidc_enforced`) | You typically do not use local bootstrap admin registration; first admin can be created through your IdP depending on config. |
 | Reverse proxy               | Set `FRONTEND_URL` and `TRUST_PROXY` correctly or auth + websockets may fail.                                                 |
+| ID token algorithm          | ExcaliDash defaults to `RS256`. If your IdP client is explicitly configured for another signed ID-token algorithm such as `HS256`, set `OIDC_ID_TOKEN_SIGNED_RESPONSE_ALG` to match that exact client setting. `none` is not allowed, and `HS*` requires `OIDC_CLIENT_SECRET`. |
 
 </details>
 
@@ -336,18 +343,21 @@ docker compose -f docker-compose.oidc.yml down
 
 Base values are documented in `backend/.env.example`. Common ones to care about:
 
-| Variable       | Default / Example         | Description                                                                         |
-| -------------- | ------------------------- | ----------------------------------------------------------------------------------- |
-| `DATABASE_URL` | `file:/app/prisma/dev.db` | SQLite file or external DB URL.                                                     |
-| `FRONTEND_URL` | `http://localhost:6767`   | Allowed frontend origin(s), comma-separated for multiple entries.                   |
-| `TRUST_PROXY`  | `false`                   | `false`, `true`, or hop count (for example `1`).                                    |
-| `JWT_SECRET`   | `change-this-secret...`   | Recommended in production so sessions remain stable across restarts and migrations. |
-| `CSRF_SECRET`  | `change-this-secret`      | Recommended in production so CSRF validation remains stable across restarts.        |
-| `AUTH_MODE`    | `local`                   | `local`, `hybrid`, `oidc_enforced`.                                                 |
+| Variable                 | Default / Example         | Description                                                                         |
+| ------------------------ | ------------------------- | ----------------------------------------------------------------------------------- |
+| `DATABASE_URL`           | `file:/app/prisma/dev.db` | SQLite file or external DB URL.                                                     |
+| `FRONTEND_URL`           | `http://localhost:6767`   | Allowed frontend origin(s), comma-separated for multiple entries.                   |
+| `TRUST_PROXY`            | `false`                   | `false`, `true`, or hop count (for example `1`).                                    |
+| `JWT_SECRET`             | `change-this-secret...`   | Recommended in production so sessions remain stable across restarts and migrations. |
+| `CSRF_SECRET`            | `change-this-secret`      | Recommended in production so CSRF validation remains stable across restarts.        |
+| `AUTH_MODE`              | `local`                   | `local`, `hybrid`, `oidc_enforced`.                                                 |
+| `ENFORCE_HTTPS_REDIRECT` | `true`                    | Set to `false` to disable the built-in HTTP→HTTPS redirect when your outer gateway handles it. |
 
 </details>
 
 # Development
+
+For contributor workflow, `make dev` starts the app in local single-user mode so you can reproduce editor bugs without going through login/onboarding. Use `make dev-auth` if you need to test local auth or OIDC flows from your `backend/.env`.
 
 <details>
 <summary>Clone the Repository</summary>
@@ -460,7 +470,7 @@ Common flags:
 </details>
 
 # Credits
-
+If you find ExcaliDash useful, please consider [sponsoring](https://github.com/sponsors/ZimengXiong)
 - Example designs from:
   - https://github.com/Prakash-sa/system-design-ultimatum/tree/main
   - https://github.com/kitsteam/excalidraw-examples/tree/main

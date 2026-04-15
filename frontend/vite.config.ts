@@ -20,6 +20,7 @@ const buildLabel = process.env.VITE_APP_BUILD_LABEL?.trim() || "local developmen
 
 export default defineConfig(({ command }) => {
   const nodeEnv = process.env.NODE_ENV || (command === "build" ? "production" : "development");
+  const devBackendTarget = process.env.VITE_DEV_BACKEND_URL?.trim() || "http://localhost:8000";
   const processEnvDefines = {
     'process.env.IS_PREACT': JSON.stringify("false"),
     'process.env.NODE_ENV': JSON.stringify(nodeEnv),
@@ -40,9 +41,14 @@ export default defineConfig(({ command }) => {
     server: {
       proxy: {
         "/api": {
-          target: "http://localhost:8000",
+          target: devBackendTarget,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api/, ""),
+        },
+        "/socket.io": {
+          target: devBackendTarget,
+          changeOrigin: true,
+          ws: true,
         },
       },
     },
