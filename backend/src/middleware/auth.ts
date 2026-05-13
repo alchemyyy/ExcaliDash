@@ -9,6 +9,11 @@ import {
   REFRESH_TOKEN_COOKIE_NAME,
   readCookie,
 } from "../auth/cookies";
+import {
+  apiKeyHashMatches,
+  extractApiKeyId,
+  isApiKeyToken,
+} from "../auth/apiKeys";
 
 declare global {
   namespace Express {
@@ -21,6 +26,7 @@ declare global {
         role: string;
         mustResetPassword?: boolean;
         impersonatorId?: string;
+        authCredentialType?: "jwt" | "apiKey" | "bootstrap";
       };
       principal?: {
         kind: "user";
@@ -70,16 +76,17 @@ const isJwtPayload = (decoded: unknown): decoded is JwtPayload => {
   );
 };
 
-const extractToken = (req: Request): string | null => {
+const extractToken = (req: Request): { token: string; source: "bearer" | "cookie" } | null => {
   const authHeader = req.headers.authorization;
   if (authHeader && typeof authHeader === "string") {
     const parts = authHeader.split(" ");
     if (parts.length === 2 && parts[0] === "Bearer") {
-      return parts[1] || null;
+      return parts[1] ? { token: parts[1], source: "bearer" } : null;
     }
   }
 
-  return readCookie(req, ACCESS_TOKEN_COOKIE_NAME);
+  const cookieToken = readCookie(req, ACCESS_TOKEN_COOKIE_NAME);
+  return cookieToken ? { token: cookieToken, source: "cookie" } : null;
 };
 
 const hasRefreshTokenCookie = (req: Request): boolean =>
@@ -135,6 +142,40 @@ export const createAuthMiddleware = ({
           .filter((group) => group.length > 0),
       ),
     );
+
+  const findActiveUser = (userId: string) =>
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        name: true,
+        role: true,
+        mustResetPassword: true,
+        isActive: true,
+      },
+    });
+
+  const authenticateApiKey = async (token: string) => {
+    const keyId = extractApiKeyId(token);
+    if (!keyId) return null;
+
+    const apiKey = await prisma.apiKey.findUnique({
+      where: { keyId },
+      include: { user: true },
+    });
+    if (!apiKey || apiKey.revokedAt) return null;
+    if (!apiKeyHashMatches(token, apiKey.tokenHash)) return null;
+    if (!apiKey.user.isActive) return null;
+
+    await prisma.apiKey.update({
+      where: { id: apiKey.id },
+      data: { lastUsedAt: new Date() },
+    });
+
+    return apiKey.user;
+  };
 
   const shouldReconcileOidcRole = async (
     payload: JwtPayload,
@@ -216,7 +257,9 @@ export const createAuthMiddleware = ({
           name: user.name,
           role: user.role,
           mustResetPassword: user.mustResetPassword,
+          authCredentialType: "bootstrap",
         };
+        req.principal = { kind: "user", userId: user.id };
         return next();
       }
     } catch (error) {
@@ -228,9 +271,9 @@ export const createAuthMiddleware = ({
       return;
     }
 
-    const token = extractToken(req);
+    const extracted = extractToken(req);
 
-    if (!token) {
+    if (!extracted) {
       res.status(401).json({
         error: "Unauthorized",
         message: "Authentication token required",
@@ -238,7 +281,48 @@ export const createAuthMiddleware = ({
       return;
     }
 
-    const payload = verifyToken(token);
+    if (extracted.source === "bearer" && isApiKeyToken(extracted.token)) {
+      try {
+        const user = await authenticateApiKey(extracted.token);
+        if (!user) {
+          res.status(401).json({
+            error: "Unauthorized",
+            message: "Invalid or revoked API key",
+          });
+          return;
+        }
+
+        if (user.mustResetPassword && !isAllowedWhileMustResetPassword(req)) {
+          res.status(403).json({
+            error: "Forbidden",
+            code: "MUST_RESET_PASSWORD",
+            message: "You must reset your password before using the app",
+          });
+          return;
+        }
+
+        req.user = {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          mustResetPassword: user.mustResetPassword,
+          authCredentialType: "apiKey",
+        };
+        req.principal = { kind: "user", userId: user.id };
+        next();
+      } catch (error) {
+        console.error("Error verifying API key:", error);
+        res.status(500).json({
+          error: "Internal server error",
+          message: "Failed to verify API key",
+        });
+      }
+      return;
+    }
+
+    const payload = verifyToken(extracted.token);
 
     if (!payload) {
       res.status(401).json({
@@ -249,18 +333,7 @@ export const createAuthMiddleware = ({
     }
 
     try {
-      const user = await prisma.user.findUnique({
-        where: { id: payload.userId },
-        select: {
-          id: true,
-          username: true,
-          email: true,
-          name: true,
-          role: true,
-          mustResetPassword: true,
-          isActive: true,
-        },
-      });
+      const user = await findActiveUser(payload.userId);
 
       if (!user || !user.isActive) {
         res.status(401).json({
@@ -290,9 +363,11 @@ export const createAuthMiddleware = ({
         email: resolvedUser.email,
         name: resolvedUser.name,
         role: resolvedUser.role,
-        mustResetPassword: resolvedUser.mustResetPassword,
-        impersonatorId: payload.impersonatorId,
-      };
+          mustResetPassword: resolvedUser.mustResetPassword,
+          impersonatorId: payload.impersonatorId,
+          authCredentialType: "jwt",
+        };
+        req.principal = { kind: "user", userId: resolvedUser.id };
 
       next();
     } catch (error) {
@@ -322,7 +397,9 @@ export const createAuthMiddleware = ({
           name: user.name,
           role: user.role,
           mustResetPassword: user.mustResetPassword,
+          authCredentialType: "bootstrap",
         };
+        req.principal = { kind: "user", userId: user.id };
         return next();
       }
     } catch (error) {
@@ -330,9 +407,9 @@ export const createAuthMiddleware = ({
       return next();
     }
 
-    const token = extractToken(req);
+    const extracted = extractToken(req);
 
-    if (!token) {
+    if (!extracted) {
       if (hasRefreshTokenCookie(req)) {
         req.authError = { code: "ACCESS_TOKEN_MISSING" };
         return next();
@@ -340,7 +417,31 @@ export const createAuthMiddleware = ({
       return next();
     }
 
-    const payload = verifyToken(token);
+    if (extracted.source === "bearer" && isApiKeyToken(extracted.token)) {
+      try {
+        const user = await authenticateApiKey(extracted.token);
+        if (user) {
+          req.user = {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            mustResetPassword: user.mustResetPassword,
+            authCredentialType: "apiKey",
+          };
+          req.principal = { kind: "user", userId: user.id };
+        } else {
+          req.authError = { code: "INVALID_ACCESS_TOKEN" };
+        }
+      } catch (error) {
+        console.error("Error in optional API key auth:", error);
+        req.authError = { code: "INVALID_ACCESS_TOKEN" };
+      }
+      return next();
+    }
+
+    const payload = verifyToken(extracted.token);
 
     if (!payload) {
       req.authError = { code: "INVALID_ACCESS_TOKEN" };
@@ -348,18 +449,7 @@ export const createAuthMiddleware = ({
     }
 
     try {
-      const user = await prisma.user.findUnique({
-        where: { id: payload.userId },
-        select: {
-          id: true,
-          username: true,
-          email: true,
-          name: true,
-          role: true,
-          mustResetPassword: true,
-          isActive: true,
-        },
-      });
+      const user = await findActiveUser(payload.userId);
 
       if (user && user.isActive) {
         req.user = {
@@ -370,7 +460,9 @@ export const createAuthMiddleware = ({
           role: user.role,
           mustResetPassword: user.mustResetPassword,
           impersonatorId: payload.impersonatorId,
+          authCredentialType: "jwt",
         };
+        req.principal = { kind: "user", userId: user.id };
       }
     } catch (error) {
       console.error("Error in optional auth:", error);

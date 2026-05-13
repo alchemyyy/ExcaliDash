@@ -328,6 +328,13 @@ Notes:
 | OIDC admin mapping          | If `OIDC_ADMIN_GROUPS` is set, admin role is reconciled on each authenticated request for OIDC users: users in those groups are promoted to `ADMIN`, users not in those groups are demoted to `USER`. |
 | Legacy sessions             | Users with old sessions (issued before group claims were embedded) should sign out/in once so OIDC group claims are refreshed. |
 
+Personal API keys for automation clients:
+
+- Create and manage keys from the authenticated account API: `GET /auth/api-keys`, `POST /auth/api-keys`, and `DELETE /auth/api-keys/:id`.
+- `POST /auth/api-keys` accepts `{ "name": "Obsidian" }` and returns the plaintext token once. Store it immediately; ExcaliDash stores only a hash and metadata.
+- Automation clients such as the Obsidian plugin should call normal drawing and collection APIs with `Authorization: Bearer <key>`, for example `Authorization: Bearer exd_...`.
+- API-key Bearer requests without browser `Origin`/`Referer` headers do not require CSRF tokens. Cookie-authenticated browser requests keep the existing CSRF behavior.
+
 </details>
 
 <details>

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { config } from "../config";
 import { createAuthMiddleware } from "./auth";
 import { BOOTSTRAP_USER_ID } from "../auth/authMode";
+import { generateApiKey } from "../auth/apiKeys";
 
 const createRequest = (overrides?: Partial<Request>): Request =>
   ({
@@ -28,6 +29,10 @@ const createDeps = () => {
     },
     authIdentity: {
       findUnique: vi.fn(),
+    },
+    apiKey: {
+      findUnique: vi.fn(),
+      update: vi.fn(),
     },
   } as any;
 
@@ -189,6 +194,81 @@ describe("auth middleware", () => {
       email: "user-1@test.local",
       impersonatorId: "admin-1",
     });
+  });
+
+  it("attaches active user for valid API key", async () => {
+    const { prisma, authModeService } = createDeps();
+    authModeService.getAuthEnabled.mockResolvedValue(true);
+    const generated = generateApiKey();
+    prisma.apiKey.findUnique.mockResolvedValue({
+      id: "api-key-1",
+      tokenHash: generated.tokenHash,
+      revokedAt: null,
+      user: {
+        id: "user-1",
+        username: "user1",
+        email: "user-1@test.local",
+        name: "User One",
+        role: "USER",
+        mustResetPassword: false,
+        isActive: true,
+      },
+    });
+    prisma.apiKey.update.mockResolvedValue({});
+    const { requireAuth } = createAuthMiddleware({ prisma, authModeService });
+
+    const req = createRequest({
+      headers: {
+        authorization: `Bearer ${generated.token}`,
+      },
+    });
+    const res = createResponse();
+    const next = vi.fn() as NextFunction;
+
+    await requireAuth(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(req.user).toMatchObject({
+      id: "user-1",
+      email: "user-1@test.local",
+      authCredentialType: "apiKey",
+    });
+    expect(req.principal).toEqual({ kind: "user", userId: "user-1" });
+    expect(prisma.apiKey.update).toHaveBeenCalledWith({
+      where: { id: "api-key-1" },
+      data: { lastUsedAt: expect.any(Date) },
+    });
+  });
+
+  it("rejects revoked API keys", async () => {
+    const { prisma, authModeService } = createDeps();
+    authModeService.getAuthEnabled.mockResolvedValue(true);
+    const generated = generateApiKey();
+    prisma.apiKey.findUnique.mockResolvedValue({
+      id: "api-key-1",
+      tokenHash: generated.tokenHash,
+      revokedAt: new Date(),
+      user: {
+        isActive: true,
+      },
+    });
+    const { requireAuth } = createAuthMiddleware({ prisma, authModeService });
+
+    const req = createRequest({
+      headers: {
+        authorization: `Bearer ${generated.token}`,
+      },
+    });
+    const res = createResponse();
+    const next = vi.fn() as NextFunction;
+
+    await requireAuth(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Invalid or revoked API key" }),
+    );
+    expect(next).not.toHaveBeenCalled();
   });
 
   it("blocks non-auth routes when password reset is required", async () => {

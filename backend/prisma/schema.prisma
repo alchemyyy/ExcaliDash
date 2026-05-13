@@ -24,6 +24,7 @@ model User {
   drawingPermissions  DrawingPermission[]
   passwordResetTokens PasswordResetToken[]
   refreshTokens       RefreshToken[]
+  apiKeys             ApiKey[]
   auditLogs           AuditLog[]
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
@@ -155,6 +156,24 @@ model RefreshToken {
   expiresAt DateTime
   revoked   Boolean  @default(false)
   createdAt DateTime @default(now())
+}
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  keyId       String    @unique
+  tokenHash   String    @unique
+  prefix      String
+  scopes      String    @default("drawings:read,drawings:write,collections:read,collections:write")
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([keyId, revokedAt])
 }
 
 model AuditLog {

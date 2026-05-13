@@ -124,3 +124,7 @@ export const changePasswordSchema = z.object({
 export const mustResetPasswordSchema = z.object({
   newPassword: passwordSchema,
 });
+
+export const apiKeyCreateSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+});

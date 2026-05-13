@@ -34,6 +34,7 @@ import {
   setAccessTokenCookie,
   setAuthCookies,
 } from "./auth/cookies";
+import { isNonBrowserApiKeyBearerRequest } from "./auth/apiKeys";
 
 interface JwtPayload {
   userId: string;
@@ -348,6 +349,10 @@ export const createAuthRouter = (deps: CreateAuthRouterDeps): express.Router => 
   };
 
   const requireCsrf = (req: Request, res: Response): boolean => {
+    if (isNonBrowserApiKeyBearerRequest(req)) {
+      return true;
+    }
+
     const origin = req.headers["origin"];
     const referer = req.headers["referer"];
     const originValue = Array.isArray(origin) ? origin[0] : origin;
