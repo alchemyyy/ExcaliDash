@@ -23,6 +23,7 @@ vi.mock("../components/Layout", () => ({
 }));
 
 vi.mock("../api", () => ({
+  API_KEY_SCOPES: ["drawings:read", "drawings:write", "collections:read", "collections:write"],
   api: {
     put: vi.fn(),
     post: vi.fn(),
@@ -54,15 +55,16 @@ describe("Profile API keys", () => {
     mockAuthUser.mockReturnValue({ id: "user-1", email: "user@example.com", name: "User One" });
     vi.mocked(api.getCollections).mockResolvedValue([]);
     vi.mocked(api.listApiKeys).mockResolvedValue([existingApiKey]);
-    vi.mocked(api.createApiKey).mockResolvedValue({
+    vi.mocked(api.createApiKey).mockImplementation(async (name, scopes) => ({
       apiKey: {
         ...existingApiKey,
         id: "key-2",
-        name: "CI Token",
+        name,
         prefix: "exd_key_new456",
+        scopes: scopes ?? ["drawings:read", "drawings:write", "collections:read", "collections:write"],
       },
       token: "exd_key_new456.secret-token-value",
-    });
+    }));
     vi.mocked(api.revokeApiKey).mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -89,7 +91,12 @@ describe("Profile API keys", () => {
 
     expect(await screen.findByDisplayValue("exd_key_new456.secret-token-value")).toBeInTheDocument();
     expect(screen.getByText(/copy this token now/i)).toBeInTheDocument();
-    expect(api.createApiKey).toHaveBeenCalledWith("CI Token");
+    expect(api.createApiKey).toHaveBeenCalledWith("CI Token", [
+      "drawings:read",
+      "drawings:write",
+      "collections:read",
+      "collections:write",
+    ]);
 
     fireEvent.click(screen.getByRole("button", { name: /copy generated api token/i }));
     await waitFor(() => {
@@ -153,5 +160,49 @@ describe("Profile API keys", () => {
 
     resolveApiKeys([existingApiKey]);
     expect(await screen.findByText("Existing Key")).toBeInTheDocument();
+  });
+
+  it("submits and displays custom API key scopes", async () => {
+    render(
+      <MemoryRouter>
+        <Profile />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("Existing Key");
+
+    fireEvent.change(screen.getByLabelText(/api key name/i), {
+      target: { value: "Read Token" },
+    });
+    fireEvent.click(screen.getByLabelText(/write drawings/i));
+    fireEvent.click(screen.getByLabelText(/read collections/i));
+    fireEvent.click(screen.getByLabelText(/write collections/i));
+    fireEvent.click(screen.getByRole("button", { name: /create api key/i }));
+
+    expect(await screen.findByDisplayValue("exd_key_new456.secret-token-value")).toBeInTheDocument();
+    expect(api.createApiKey).toHaveBeenCalledWith("Read Token", ["drawings:read"]);
+    expect(screen.getAllByText("drawings:read").length).toBeGreaterThan(0);
+  });
+
+  it("disables API key creation and shows validation when no scopes are selected", async () => {
+    render(
+      <MemoryRouter>
+        <Profile />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("Existing Key");
+
+    fireEvent.change(screen.getByLabelText(/api key name/i), {
+      target: { value: "No Scope Token" },
+    });
+    fireEvent.click(screen.getByLabelText(/read drawings/i));
+    fireEvent.click(screen.getByLabelText(/write drawings/i));
+    fireEvent.click(screen.getByLabelText(/read collections/i));
+    fireEvent.click(screen.getByLabelText(/write collections/i));
+
+    expect(screen.getByText(/select at least one api key scope/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create api key/i })).toBeDisabled();
+    expect(api.createApiKey).not.toHaveBeenCalled();
   });
 });

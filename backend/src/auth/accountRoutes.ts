@@ -90,6 +90,16 @@ export const registerAccountRoutes = (deps: RegisterAccountRoutesDeps) => {
     updatedAt: apiKey.updatedAt,
   });
 
+  const normalizeApiKeyScopes = (scopes: string[] | undefined): string[] | null => {
+    if (!scopes) return [...DEFAULT_API_KEY_SCOPES];
+    const allowedScopes = new Set<string>(DEFAULT_API_KEY_SCOPES);
+    const normalized = Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean)));
+    if (normalized.length === 0 || normalized.some((scope) => !allowedScopes.has(scope))) {
+      return null;
+    }
+    return normalized;
+  };
+
   router.post("/password-reset-request", loginAttemptRateLimiter, async (req: Request, res: Response) => {
     if (!(await ensureAuthEnabled(res))) return;
     if (!config.enablePasswordReset) {
@@ -363,6 +373,14 @@ export const registerAccountRoutes = (deps: RegisterAccountRoutesDeps) => {
         });
       }
 
+      const scopes = normalizeApiKeyScopes(parsed.data.scopes);
+      if (!scopes) {
+        return res.status(400).json({
+          error: "Validation error",
+          message: "Select at least one valid API key scope",
+        });
+      }
+
       const generated = generateApiKey();
       const apiKey = await prisma.apiKey.create({
         data: {
@@ -371,7 +389,7 @@ export const registerAccountRoutes = (deps: RegisterAccountRoutesDeps) => {
           keyId: generated.keyId,
           tokenHash: generated.tokenHash,
           prefix: generated.prefix,
-          scopes: serializeApiKeyScopes(DEFAULT_API_KEY_SCOPES),
+          scopes: serializeApiKeyScopes(scopes),
         },
         select: {
           id: true,

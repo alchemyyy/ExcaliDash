@@ -23,6 +23,8 @@ const buildApp = (options?: { impersonatorId?: string }) => {
     },
     apiKey: {
       findFirst: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
       update: vi.fn(),
     },
   } as any;
@@ -140,5 +142,83 @@ describe("accountRoutes local-password safeguards", () => {
     expect(response.body?.message).toContain("impersonating");
     expect(prisma.apiKey.findFirst).not.toHaveBeenCalled();
     expect(prisma.apiKey.update).not.toHaveBeenCalled();
+  });
+
+  it("creates API keys with sanitized custom scopes", async () => {
+    const { app, prisma } = buildApp();
+    prisma.apiKey.create.mockImplementation(async ({ data }: any) => ({
+      id: "key-1",
+      name: data.name,
+      prefix: data.prefix,
+      scopes: data.scopes,
+      lastUsedAt: null,
+      revokedAt: null,
+      createdAt: new Date("2026-05-01T12:00:00.000Z"),
+      updatedAt: new Date("2026-05-01T12:00:00.000Z"),
+    }));
+
+    const response = await request(app).post("/api-keys").send({
+      name: "Scoped Key",
+      scopes: [" drawings:read ", "drawings:read", "collections:write"],
+    });
+
+    expect(response.status).toBe(201);
+    expect(prisma.apiKey.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: "Scoped Key",
+        scopes: "drawings:read,collections:write",
+      }),
+    }));
+    expect(response.body.apiKey.scopes).toEqual(["drawings:read", "collections:write"]);
+    expect(response.body.token).toMatch(/^exd_/);
+  });
+
+  it("keeps default API key scopes when scopes are omitted", async () => {
+    const { app, prisma } = buildApp();
+    prisma.apiKey.create.mockImplementation(async ({ data }: any) => ({
+      id: "key-1",
+      name: data.name,
+      prefix: data.prefix,
+      scopes: data.scopes,
+      lastUsedAt: null,
+      revokedAt: null,
+      createdAt: new Date("2026-05-01T12:00:00.000Z"),
+      updatedAt: new Date("2026-05-01T12:00:00.000Z"),
+    }));
+
+    const response = await request(app).post("/api-keys").send({ name: "Default Key" });
+
+    expect(response.status).toBe(201);
+    expect(prisma.apiKey.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        scopes: "drawings:read,drawings:write,collections:read,collections:write",
+      }),
+    }));
+  });
+
+  it("rejects API key creation with no scopes", async () => {
+    const { app, prisma } = buildApp();
+
+    const response = await request(app).post("/api-keys").send({
+      name: "No Scopes",
+      scopes: [],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body?.message).toContain("at least one");
+    expect(prisma.apiKey.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects API key creation with invalid scopes", async () => {
+    const { app, prisma } = buildApp();
+
+    const response = await request(app).post("/api-keys").send({
+      name: "Bad Scope",
+      scopes: ["drawings:read", "admin:write"],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body?.message).toContain("valid API key scope");
+    expect(prisma.apiKey.create).not.toHaveBeenCalled();
   });
 });

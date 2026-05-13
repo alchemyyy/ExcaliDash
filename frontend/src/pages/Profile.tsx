@@ -27,6 +27,13 @@ const formatApiKeyDate = (value: string | null) => {
     return new Date(value).toLocaleString();
 };
 
+const API_KEY_SCOPE_LABELS: Record<string, string> = {
+    'drawings:read': 'Read drawings',
+    'drawings:write': 'Write drawings',
+    'collections:read': 'Read collections',
+    'collections:write': 'Write collections',
+};
+
 export const Profile: React.FC = () => {
     const { user: authUser, logout, authEnabled } = useAuth();
     const navigate = useNavigate();
@@ -51,6 +58,7 @@ export const Profile: React.FC = () => {
     const [apiKeys, setApiKeys] = useState<api.ApiKeyMetadata[]>([]);
     const [apiKeysLoading, setApiKeysLoading] = useState(false);
     const [apiKeyName, setApiKeyName] = useState('');
+    const [selectedApiKeyScopes, setSelectedApiKeyScopes] = useState<string[]>([...api.API_KEY_SCOPES]);
     const [apiKeyActionLoading, setApiKeyActionLoading] = useState(false);
     const [apiKeyError, setApiKeyError] = useState('');
     const [generatedToken, setGeneratedToken] = useState('');
@@ -273,6 +281,10 @@ export const Profile: React.FC = () => {
             setApiKeyError('API key name is required');
             return;
         }
+        if (selectedApiKeyScopes.length === 0) {
+            setApiKeyError('Select at least one API key scope');
+            return;
+        }
 
         setApiKeyActionLoading(true);
         setApiKeyError('');
@@ -282,9 +294,10 @@ export const Profile: React.FC = () => {
         setCopiedToken(false);
 
         try {
-            const response = await api.createApiKey(trimmedName);
+            const response = await api.createApiKey(trimmedName, selectedApiKeyScopes);
             setApiKeys(prev => [response.apiKey, ...prev]);
             setApiKeyName('');
+            setSelectedApiKeyScopes([...api.API_KEY_SCOPES]);
             setGeneratedToken(response.token);
             setGeneratedTokenName(response.apiKey.name);
             setSuccess('API key created. Copy the token now; it will not be shown again.');
@@ -324,6 +337,14 @@ export const Profile: React.FC = () => {
         setGeneratedToken('');
         setGeneratedTokenName('');
         setCopiedToken(false);
+    };
+
+    const handleApiKeyScopeChange = (scope: string, checked: boolean) => {
+        const next = checked
+            ? [...selectedApiKeyScopes, scope]
+            : selectedApiKeyScopes.filter(value => value !== scope);
+        setSelectedApiKeyScopes(api.API_KEY_SCOPES.filter(value => next.includes(value)));
+        setApiKeyError(next.length === 0 ? 'Select at least one API key scope' : '');
     };
 
     const handleRevokeApiKey = async (id: string) => {
@@ -556,7 +577,8 @@ export const Profile: React.FC = () => {
                         </div>
                     )}
 
-                    <div className="flex flex-col sm:flex-row gap-3 mb-6">
+                    <div className="space-y-4 mb-6">
+                        <div className="flex flex-col sm:flex-row gap-3">
                         <div className="flex-1">
                             <label htmlFor="apiKeyName" className="block text-sm font-bold text-slate-700 dark:text-neutral-300 mb-2">
                                 API Key Name
@@ -573,11 +595,31 @@ export const Profile: React.FC = () => {
                         </div>
                         <button
                             onClick={() => void handleCreateApiKey()}
-                            disabled={apiKeysLoading || apiKeyActionLoading || !apiKeyName.trim()}
+                            disabled={apiKeysLoading || apiKeyActionLoading || !apiKeyName.trim() || selectedApiKeyScopes.length === 0}
                             className="sm:self-end px-6 py-3 bg-emerald-600 dark:bg-emerald-500 text-white font-bold rounded-xl border-2 border-black dark:border-neutral-700 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] dark:shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] dark:hover:shadow-[4px_4px_0px_0px_rgba(255,255,255,0.2)] hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] dark:disabled:hover:shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)]"
                         >
                             {apiKeyActionLoading ? 'Creating...' : 'Create API Key'}
                         </button>
+                        </div>
+                        <fieldset>
+                            <legend className="block text-sm font-bold text-slate-700 dark:text-neutral-300 mb-2">
+                                Scopes
+                            </legend>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {api.API_KEY_SCOPES.map(scope => (
+                                    <label key={scope} className="flex items-center gap-2 px-3 py-2 bg-slate-50 dark:bg-neutral-800 border-2 border-slate-200 dark:border-neutral-700 rounded-xl text-sm font-medium text-slate-700 dark:text-neutral-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedApiKeyScopes.includes(scope)}
+                                            onChange={(event) => handleApiKeyScopeChange(scope, event.target.checked)}
+                                            className="h-4 w-4 accent-emerald-600"
+                                        />
+                                        <span>{API_KEY_SCOPE_LABELS[scope]}</span>
+                                        <span className="font-mono text-xs text-slate-500 dark:text-neutral-500">{scope}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </fieldset>
                     </div>
 
                     {apiKeysLoading ? (

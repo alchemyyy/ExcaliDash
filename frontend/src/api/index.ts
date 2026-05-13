@@ -119,6 +119,13 @@ export interface CreateApiKeyResponse {
   token: string;
 }
 
+export const API_KEY_SCOPES = [
+  "drawings:read",
+  "drawings:write",
+  "collections:read",
+  "collections:write",
+] as const;
+
 export const authStatus = async (): Promise<AuthStatusResponse> => {
   const response = await axios.get<AuthStatusResponse>(
     `${API_URL}/auth/status`,
@@ -183,8 +190,8 @@ export const listApiKeys = async (): Promise<ApiKeyMetadata[]> => {
   return response.data.apiKeys;
 };
 
-export const createApiKey = async (name: string): Promise<CreateApiKeyResponse> => {
-  const response = await api.post<CreateApiKeyResponse>("/auth/api-keys", { name });
+export const createApiKey = async (name: string, scopes?: string[]): Promise<CreateApiKeyResponse> => {
+  const response = await api.post<CreateApiKeyResponse>("/auth/api-keys", { name, scopes });
   return response.data;
 };
 

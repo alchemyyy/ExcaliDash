@@ -127,4 +127,5 @@ export const mustResetPasswordSchema = z.object({
 
 export const apiKeyCreateSchema = z.object({
   name: z.string().trim().min(1).max(100),
+  scopes: z.array(z.string()).optional(),
 });
