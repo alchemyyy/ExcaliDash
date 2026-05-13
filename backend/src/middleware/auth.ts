@@ -124,13 +124,40 @@ const isAllowedWhileMustResetPassword = (req: Request): boolean => {
   return false;
 };
 
-const getRequiredApiKeyScope = (req: Request): string | null => {
+const getApiKeyRouteResource = (req: Request): "drawings" | "collections" | null => {
   const path = normalizeRequestPath(req);
-  const resource = path === "/drawings" || path.startsWith("/drawings/")
-    ? "drawings"
-    : path === "/collections" || path.startsWith("/collections/")
-      ? "collections"
-      : null;
+  const segments = path.split("/").filter(Boolean);
+  const method = req.method;
+
+  if (segments[0] === "drawings") {
+    if (segments.length === 1 && ["GET", "HEAD", "POST"].includes(method)) {
+      return "drawings";
+    }
+    if (
+      segments.length === 2 &&
+      segments[1] !== "shared" &&
+      ["GET", "HEAD", "PUT", "DELETE"].includes(method)
+    ) {
+      return "drawings";
+    }
+    return null;
+  }
+
+  if (segments[0] === "collections") {
+    if (segments.length === 1 && ["GET", "HEAD", "POST"].includes(method)) {
+      return "collections";
+    }
+    if (segments.length === 2 && ["PUT", "DELETE"].includes(method)) {
+      return "collections";
+    }
+    return null;
+  }
+
+  return null;
+};
+
+const getRequiredApiKeyScope = (req: Request): string | null => {
+  const resource = getApiKeyRouteResource(req);
   if (!resource) return null;
 
   const access = req.method === "GET" || req.method === "HEAD" ? "read" : "write";
@@ -461,8 +488,10 @@ export const createAuthMiddleware = ({
       try {
         const result = await authenticateApiKey(extracted.token);
         if (result) {
-          if (!authorizeApiKeyRequest(req, res, result.scopes)) {
-            return;
+          const requiredScope = getRequiredApiKeyScope(req);
+          if (!requiredScope || !result.scopes.includes(requiredScope)) {
+            req.authError = { code: "INVALID_ACCESS_TOKEN" };
+            return next();
           }
           const { user } = result;
           req.user = {

@@ -3,7 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAccountRoutes } from "./accountRoutes";
 
-const buildApp = () => {
+const buildApp = (options?: { impersonatorId?: string }) => {
   const router = express.Router();
   router.use(express.json());
 
@@ -21,6 +21,10 @@ const buildApp = () => {
     refreshToken: {
       updateMany: vi.fn(),
     },
+    apiKey: {
+      findFirst: vi.fn(),
+      update: vi.fn(),
+    },
   } as any;
 
   registerAccountRoutes({
@@ -32,6 +36,7 @@ const buildApp = () => {
         email: "user@example.com",
         name: "User",
         role: "USER",
+        impersonatorId: options?.impersonatorId,
       };
       next();
     }) as any,
@@ -124,5 +129,16 @@ describe("accountRoutes local-password safeguards", () => {
       data: { used: true },
     });
     expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects API key revocation while impersonating", async () => {
+    const { app, prisma } = buildApp({ impersonatorId: "admin-1" });
+
+    const response = await request(app).delete("/api-keys/key-1");
+
+    expect(response.status).toBe(403);
+    expect(response.body?.message).toContain("impersonating");
+    expect(prisma.apiKey.findFirst).not.toHaveBeenCalled();
+    expect(prisma.apiKey.update).not.toHaveBeenCalled();
   });
 });

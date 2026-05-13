@@ -123,6 +123,15 @@ describe("API key authentication", () => {
     expect(response.status).toBe(403);
   });
 
+  it("rejects API key access to drawing permission subroutes", async () => {
+    const response = await request(app)
+      .post("/drawings/drawing-1/permissions")
+      .set("Authorization", `Bearer ${apiKeyToken}`)
+      .send({ granteeUserId: "user-2", permission: "view" });
+
+    expect(response.status).toBe(403);
+  });
+
   it("stores only hashed API keys and metadata", async () => {
     const stored = await prisma.apiKey.findUnique({ where: { id: apiKeyId } });
 

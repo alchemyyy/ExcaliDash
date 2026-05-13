@@ -415,6 +415,12 @@ export const registerAccountRoutes = (deps: RegisterAccountRoutesDeps) => {
       if (!req.user) {
         return res.status(401).json({ error: "Unauthorized", message: "User not authenticated" });
       }
+      if (req.user.impersonatorId) {
+        return res.status(403).json({
+          error: "Forbidden",
+          message: "API key revocation is not allowed while impersonating",
+        });
+      }
 
       const apiKey = await prisma.apiKey.findFirst({
         where: { id: req.params.id, userId: req.user.id },

@@ -68,7 +68,6 @@ describe("Profile API keys", () => {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
   it("lists, creates, copies, and revokes API keys", async () => {
@@ -101,6 +100,7 @@ describe("Profile API keys", () => {
     expect(screen.queryByDisplayValue("exd_key_new456.secret-token-value")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /revoke api key ci token/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^revoke$/i }));
 
     await waitFor(() => {
       expect(api.revokeApiKey).toHaveBeenCalledWith("key-2");

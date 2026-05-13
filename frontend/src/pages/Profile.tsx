@@ -8,6 +8,7 @@ import { User, Lock, Save, X, KeyRound, Copy, Trash2 } from 'lucide-react';
 import { USER_KEY } from '../utils/impersonation';
 import { getPasswordPolicy, validatePassword } from '../utils/passwordPolicy';
 import { PasswordRequirements } from '../components/PasswordRequirements';
+import { ConfirmModal } from '../components/ConfirmModal';
 
 const getApiErrorMessage = (err: unknown, fallback: string) => {
     if (api.isAxiosError(err)) {
@@ -55,6 +56,7 @@ export const Profile: React.FC = () => {
     const [generatedToken, setGeneratedToken] = useState('');
     const [generatedTokenName, setGeneratedTokenName] = useState('');
     const [copiedToken, setCopiedToken] = useState(false);
+    const [apiKeyToRevoke, setApiKeyToRevoke] = useState<api.ApiKeyMetadata | null>(null);
 
     useEffect(() => {
         if (authEnabled === false) {
@@ -324,10 +326,7 @@ export const Profile: React.FC = () => {
         setCopiedToken(false);
     };
 
-    const handleRevokeApiKey = async (id: string, name: string) => {
-        const confirmed = window.confirm(`Revoke API key "${name}"? Existing integrations using this key will stop working.`);
-        if (!confirmed) return;
-
+    const handleRevokeApiKey = async (id: string) => {
         setApiKeyActionLoading(true);
         setApiKeyError('');
         setSuccess('');
@@ -341,6 +340,7 @@ export const Profile: React.FC = () => {
             setApiKeyError(getApiErrorMessage(err, 'Failed to revoke API key'));
         } finally {
             setApiKeyActionLoading(false);
+            setApiKeyToRevoke(null);
         }
     };
 
@@ -622,7 +622,7 @@ export const Profile: React.FC = () => {
                                                 </dl>
                                             </div>
                                             <button
-                                                onClick={() => void handleRevokeApiKey(apiKey.id, apiKey.name)}
+                                                onClick={() => setApiKeyToRevoke(apiKey)}
                                                 disabled={apiKeyActionLoading || revoked}
                                                 className="px-4 py-2 bg-white dark:bg-neutral-900 text-red-700 dark:text-red-300 font-bold rounded-xl border-2 border-black dark:border-neutral-700 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] dark:shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] dark:hover:shadow-[4px_4px_0px_0px_rgba(255,255,255,0.2)] hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] dark:disabled:hover:shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)] flex items-center justify-center gap-2"
                                                 aria-label={`Revoke API key ${apiKey.name}`}
@@ -740,6 +740,14 @@ export const Profile: React.FC = () => {
 	                    )}
                 </div>
             </div>
+            <ConfirmModal
+                isOpen={Boolean(apiKeyToRevoke)}
+                title="Revoke API Key"
+                message={apiKeyToRevoke ? `Revoke API key "${apiKeyToRevoke.name}"? Existing integrations using this key will stop working.` : ''}
+                confirmText="Revoke"
+                onConfirm={() => apiKeyToRevoke && void handleRevokeApiKey(apiKeyToRevoke.id)}
+                onCancel={() => setApiKeyToRevoke(null)}
+            />
         </Layout>
     );
 };
