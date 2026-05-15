@@ -5,6 +5,32 @@ import { PrismaClient } from "../generated/client";
 import { generateApiKey, serializeApiKeyScopes } from "../auth/apiKeys";
 import { getTestPrisma, setupTestDb } from "./testUtils";
 
+type ApiKeyFixture = {
+  id: string;
+  token: string;
+};
+
+async function createApiKeyFixture(
+  prisma: PrismaClient,
+  userId: string,
+  name: string,
+): Promise<ApiKeyFixture> {
+  const generated = generateApiKey();
+  const apiKey = await prisma.apiKey.create({
+    data: {
+      userId,
+      name,
+      keyId: generated.keyId,
+      tokenHash: generated.tokenHash,
+      prefix: generated.prefix,
+      scopes: serializeApiKeyScopes(),
+    },
+    select: { id: true },
+  });
+
+  return { id: apiKey.id, token: generated.token };
+}
+
 describe("API key authentication", () => {
   let prisma: PrismaClient;
   let app: any;
@@ -37,20 +63,9 @@ describe("API key authentication", () => {
     });
     userId = user.id;
 
-    const generated = generateApiKey();
-    apiKeyToken = generated.token;
-    const apiKey = await prisma.apiKey.create({
-      data: {
-        userId,
-        name: "Obsidian automation",
-        keyId: generated.keyId,
-        tokenHash: generated.tokenHash,
-        prefix: generated.prefix,
-        scopes: serializeApiKeyScopes(),
-      },
-      select: { id: true },
-    });
-    apiKeyId = apiKey.id;
+    const apiKeyFixture = await createApiKeyFixture(prisma, userId, "Obsidian automation");
+    apiKeyToken = apiKeyFixture.token;
+    apiKeyId = apiKeyFixture.id;
 
     const adminUser = await prisma.user.create({
       data: {
@@ -62,18 +77,8 @@ describe("API key authentication", () => {
       },
       select: { id: true },
     });
-    const adminGenerated = generateApiKey();
-    adminApiKeyToken = adminGenerated.token;
-    await prisma.apiKey.create({
-      data: {
-        userId: adminUser.id,
-        name: "Admin automation",
-        keyId: adminGenerated.keyId,
-        tokenHash: adminGenerated.tokenHash,
-        prefix: adminGenerated.prefix,
-        scopes: serializeApiKeyScopes(),
-      },
-    });
+    const adminApiKeyFixture = await createApiKeyFixture(prisma, adminUser.id, "Admin automation");
+    adminApiKeyToken = adminApiKeyFixture.token;
   });
 
   afterAll(async () => {
