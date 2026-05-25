@@ -284,6 +284,7 @@ export const registerCollectionRoutes = (
           granteeUser: { select: { id: true, name: true, email: true } },
         },
       });
+      invalidateDrawingsCache();
 
       return res.json({ share });
     }),
@@ -314,6 +315,7 @@ export const registerCollectionRoutes = (
       });
       if (share.count === 0)
         return res.status(404).json({ error: "Share not found" });
+      invalidateDrawingsCache();
 
       return res.json({ success: true });
     }),
@@ -336,6 +338,7 @@ export const registerCollectionRoutes = (
       await prisma.collectionShare.deleteMany({
         where: { collectionId: id, granteeUserId: userId },
       });
+      invalidateDrawingsCache();
       return res.json({ success: true });
     }),
   );

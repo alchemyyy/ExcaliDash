@@ -222,6 +222,7 @@ describe("Collection Sharing - Backend Integration", () => {
 
   it("revokes access after removing collection share", async () => {
     const collection = await createCollection();
+    await createDrawingInCollection(collection.id);
 
     await ownerAgent
       .post(`/collections/${collection.id}/shares`)
@@ -229,6 +230,12 @@ describe("Collection Sharing - Backend Integration", () => {
       .set("Authorization", `Bearer ${ownerToken}`)
       .set(ownerCsrfHeaderName, ownerCsrfToken)
       .send({ identifier: viewer.email, role: "view" });
+    const beforeRevokeListResponse = await request(app)
+      .get(`/drawings?collectionId=${collection.id}`)
+      .set("User-Agent", userAgent)
+      .set("Authorization", `Bearer ${viewerToken}`);
+    expect(beforeRevokeListResponse.status).toBe(200);
+    expect(beforeRevokeListResponse.headers["x-cache"]).toBe("MISS");
 
     const deleteShareResponse = await ownerAgent
       .delete(`/collections/${collection.id}/shares/${viewer.id}`)
