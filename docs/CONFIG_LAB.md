@@ -35,8 +35,19 @@ password: admin123!
 ```
 
 The local Keycloak realm includes an `excalidash` client with
-`excalidash-secret`. See `local/oidc/realm-excalidash-local.json` for seeded
-users and realm details.
+`excalidash-secret`. See `local/oidc/realm-excalidash-local.json` for full
+realm details.
+
+Seeded ExcaliDash OIDC users:
+
+| Username | Password | Role |
+| --- | --- | --- |
+| admin | adminpass | ExcaliDash admin |
+| alice | alicepass | ExcaliDash admin |
+| bob | bobpass | ExcaliDash user |
+
+The OIDC-backed app variants map the Keycloak `excalidash-admins` group to the
+ExcaliDash `ADMIN` role via `OIDC_ADMIN_GROUPS=excalidash-admins`.
 
 ## Reset
 
