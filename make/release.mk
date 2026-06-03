@@ -96,17 +96,17 @@ release: ## Full release workflow (main branch only)
 	echo "GitHub release created."; \
 	echo "Docker images published."
 
-pre-release: ## Pre-release workflow (pre-release branch only)
+pre-release: ## Pre-release workflow (prerelease/pre-release branch only)
 	@CURRENT_BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
-	if [ "$$CURRENT_BRANCH" != "pre-release" ]; then \
-		echo "ERROR: Pre-releases must be made from 'pre-release' branch!"; \
+	if [ "$$CURRENT_BRANCH" != "prerelease" ] && [ "$$CURRENT_BRANCH" != "pre-release" ]; then \
+		echo "ERROR: Pre-releases must be made from 'prerelease' or 'pre-release' branch!"; \
 		echo "Current branch: $$CURRENT_BRANCH"; \
-		echo "Please switch to pre-release and try again."; \
+		echo "Please switch to the prerelease branch and try again."; \
 		exit 1; \
 	fi
 	@echo "On pre-release branch."
 	@echo "Pulling latest changes..."
-	@git pull origin pre-release
+	@CURRENT_BRANCH=$$(git rev-parse --abbrev-ref HEAD); git pull origin "$$CURRENT_BRANCH"
 	@echo "Up to date with remote."
 	@echo "Current status:"
 	@git status --short || true
@@ -165,8 +165,8 @@ pre-release: ## Pre-release workflow (pre-release branch only)
 	git commit -m "chore: pre-release v$$NEW_VERSION-dev" || echo "Nothing to commit."
 	@echo "Changes committed."
 	@echo "Pushing to remote..."
-	@git push origin pre-release
-	@echo "Pushed to origin/pre-release."
+	@CURRENT_BRANCH=$$(git rev-parse --abbrev-ref HEAD); git push origin "$$CURRENT_BRANCH"
+	@CURRENT_BRANCH=$$(git rev-parse --abbrev-ref HEAD); echo "Pushed to origin/$$CURRENT_BRANCH."
 	@NEW_VERSION=$$(cat VERSION); \
 	PRE_TAG="v$$NEW_VERSION-dev"; \
 	echo "Creating tag $$PRE_TAG..."; \

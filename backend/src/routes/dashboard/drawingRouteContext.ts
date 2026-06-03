@@ -103,7 +103,7 @@ export const createDrawingRouteContext = (
 
     const clonedFiles: Record<string, any> = { ...files };
     const cfg = getS3Config();
-    await Promise.allSettled(
+    await Promise.all(
       records.map(async (record) => {
         const extension = record.s3Key.includes(".")
           ? record.s3Key.substring(record.s3Key.lastIndexOf(".") + 1)

@@ -20,7 +20,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@excalidraw/excalidraw": "^0.18.1",
     "@types/lodash": "^4.17.20",
-    "axios": "^1.15.2",
+    "axios": "^1.16.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "jszip": "^3.10.1",
@@ -55,7 +55,7 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.3",
     "vite": "^7.3.2",
-    "vitest": "^4.0.15"
+    "vitest": "^4.1.8"
   },
   "overrides": {
     "@excalidraw/excalidraw": {

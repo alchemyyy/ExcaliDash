@@ -30,7 +30,10 @@ export const CustomSelect: React.FC<Props> = ({
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(event.target as Node)
+      ) {
         setIsOpen(false);
       }
     };
@@ -38,10 +41,14 @@ export const CustomSelect: React.FC<Props> = ({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen]);
 
-  const currentOption = options.find((option) => option.value === value) || options[0];
+  const currentOption =
+    options.find((option) => option.value === value) || options[0];
 
   return (
-    <div className={clsx("relative inline-flex items-center", className)} ref={containerRef}>
+    <div
+      className={clsx("relative inline-flex items-center", className)}
+      ref={containerRef}
+    >
       <button
         type="button"
         onClick={(event) => {
@@ -58,7 +65,13 @@ export const CustomSelect: React.FC<Props> = ({
       >
         {icon}
         <span>{currentOption.label}</span>
-        <ChevronDown size={14} className={clsx("transition-transform duration-200", isOpen && "rotate-180")} />
+        <ChevronDown
+          size={14}
+          className={clsx(
+            "transition-transform duration-200",
+            isOpen && "rotate-180",
+          )}
+        />
       </button>
 
       {isOpen && (
@@ -88,7 +101,9 @@ export const CustomSelect: React.FC<Props> = ({
               )}
             >
               {option.label}
-              {option.value === value && showCheck && <Check size={12} strokeWidth={3} />}
+              {option.value === value && showCheck && (
+                <Check size={12} strokeWidth={3} />
+              )}
             </button>
           ))}
         </div>

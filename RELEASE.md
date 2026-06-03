@@ -1,11 +1,36 @@
-Release date: 2026-04-17
+# ExcaliDash v0.5.0-dev
 
-| Area | Key Changes |
+Release date: 2026-06-03
+
+This is a prerelease build intended for validation before the next stable release.
+
+| Area | Key changes |
 |------|-------------|
-| **OIDC hardening** | ID token signing alg resolution with discovery fallback + explicit override (`OIDC_ID_TOKEN_SIGNED_RESPONSE_ALG`), token endpoint auth method override (`OIDC_TOKEN_ENDPOINT_AUTH_METHOD`), HS-alg mismatch auto-retry in callback, Keycloak/Authentik preflight warnings, `oidc-doctor.cjs` diagnostic tool, provider-specific `.env` example files |
-| **Admin OIDC controls** | Runtime JIT provisioning toggle via admin panel + DB (`oidcJitProvisioningEnabled` column + migration), OIDC-only invited user creation (`oidcOnly` flag), block self-registration toggle in `oidc_enforced` mode |
-| **HTTPS redirect policy** | Refactored into pure `httpsRedirectPolicy.ts` module, new `ENFORCE_HTTPS_REDIRECT` env var, mixed http/https `FRONTEND_URL` support, IPv4 loopback healthchecks |
-| **Frontend resilience** | `AuthStatusErrorPanel` with retry for backend connectivity failures, `registrationEnabled` propagation to hide register link/route, multi-image drag-and-drop import in Editor, Excalidraw asset copy script for dev + build |
+| **Sharing and collaboration** | Collection sharing, drawing link/person sharing, shared collection role handling, access-aware editor loading, and collaboration safety fixes. |
+| **Storage and files** | S3-backed image file records, private-bucket file redirects, storage trim/diff/orphan cleanup APIs, S3 delete accounting, and safer S3 key migration for nested prefixes. |
+| **Account and admin** | API keys, user preferences, profile/password cards, admin user management split, access-control settings, and login rate-limit controls. |
+| **Editor reliability** | Safer snapshot persistence, image status normalization, multi-image drop import, collaboration/file delta handling, and extracted editor modules under the source line-count gate. |
+| **Import/export and backups** | Improved import helpers, file processing coverage, SQLite backup scheduler, and compatibility tests. |
+| **Deployment and lab tooling** | Production/lab compose updates, deployment docs, reproducible environment lab, release scripts, and source line-count checks. |
+
+## Verification
+
+The prerelease branch has been verified locally with:
+
+- Frontend build
+- Backend build
+- Frontend unit tests
+- Backend unit/integration tests
+- Frontend and backend npm audit
+- `git diff --check`
+- Source line-count gate for handwritten TypeScript/TSX
+- SQLite smoke test for the S3 composite-key migration with default and nested key prefixes
+
+## Known prerelease notes
+
+- S3-enabled deployments should validate private file redirects, storage trim, duplicate/copy, and orphan cleanup against their real bucket before promoting this prerelease to stable.
+- Docker image publishing is manual through the release scripts in this repo. Confirm DockerHub login and a working Docker buildx builder before publishing images.
+- GitHub and DockerHub publishing should happen only from a clean, committed branch.
 
 ## Upgrading
 
@@ -14,27 +39,28 @@ Release date: 2026-04-17
 
 ### Data safety checklist
 
-- Back up backend volume (`dev.db`, secrets) before upgrading.
+- Back up the backend volume (`dev.db`, secrets, uploads, and S3 bucket data) before upgrading.
 - Let migrations run on startup (`RUN_MIGRATIONS=true`) for normal deploys.
+- If S3 is enabled, verify that existing object keys follow the canonical layout `{prefix}/{userId}/{drawingId}/{fileId}.{ext}`.
 - Run `docker compose -f docker-compose.prod.yml logs backend --tail=200` after rollout and verify startup/migration status.
 
-### Recommended upgrade (Docker Hub compose)
+### Recommended prerelease upgrade
 
 ```bash
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-### Pin images to this release (recommended for reproducible deploys)
+### Pin images to this prerelease
 
-Edit `docker-compose.prod.yml` and pin the release tags:
+Edit `docker-compose.prod.yml` and pin the prerelease tags:
 
 ```yaml
 services:
   backend:
-    image: zimengxiong/excalidash-backend:v0.5.0
+    image: zimengxiong/excalidash-backend:v0.5.0-dev
   frontend:
-    image: zimengxiong/excalidash-frontend:v0.5.0
+    image: zimengxiong/excalidash-frontend:v0.5.0-dev
 ```
 
 Example:

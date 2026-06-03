@@ -15,12 +15,16 @@ import {
 } from "../s3";
 import {
   VALID_STORAGE_FILE_ID,
-  buildFilesDiff,
-  collectReferencedFileIds,
-  fileIdFromS3Key,
   type S3FileRecord,
   type S3ObjectRecord,
 } from "./storage/helpers";
+import {
+  buildFilesDiffResponse,
+  buildOrphanDeletePlan,
+  buildTrimPlan,
+  buildTrimS3CleanupPlan,
+} from "./storage/plans";
+import { deleteS3KeysInBatches } from "./storage/s3Delete";
 
 export type StorageRouteDeps = {
   prisma: PrismaClient;
@@ -29,8 +33,8 @@ export type StorageRouteDeps = {
     fn: (
       req: express.Request,
       res: express.Response,
-      next: express.NextFunction
-    ) => Promise<T>
+      next: express.NextFunction,
+    ) => Promise<T>,
   ) => express.RequestHandler;
   parseJsonField: <T>(rawValue: string | null | undefined, fallback: T) => T;
   invalidateDrawingsCache: () => void;
@@ -39,7 +43,7 @@ export type StorageRouteDeps = {
 
 export const registerStorageRoutes = (
   app: express.Express,
-  deps: StorageRouteDeps
+  deps: StorageRouteDeps,
 ): void => {
   const {
     prisma,
@@ -88,29 +92,10 @@ export const registerStorageRoutes = (
           .json({ error: "confirmName does not match drawing name" });
       }
 
-      // 2. Parse elements and files
       const elements: any[] = parseJsonField(drawing.elements, []);
       const files: Record<string, any> = parseJsonField(drawing.files, {});
+      const trimPlan = buildTrimPlan(elements, files);
 
-      // 3. Filter elements: keep only non-deleted
-      const activeElements = elements.filter((el) => !el.isDeleted);
-      const elementsRemoved = elements.length - activeElements.length;
-
-      // 4. Collect surviving fileIds
-      const survivingFileIds = collectReferencedFileIds(activeElements, false);
-
-      // 5. Filter files
-      const originalFileCount = Object.keys(files).length;
-      const cleanedFiles: Record<string, any> = {};
-      for (const [fileId, value] of Object.entries(files)) {
-        if (survivingFileIds.has(fileId)) {
-          cleanedFiles[fileId] = value;
-        }
-      }
-      const filesRemoved = originalFileCount - Object.keys(cleanedFiles).length;
-
-      // 6. S3 cleanup
-      //
       // S3File is keyed (drawingId, fileId) and S3 objects sit under a
       // per-drawing path, so this drawing's storage is independent from
       // every other drawing's — no cross-drawing reference check needed.
@@ -128,38 +113,25 @@ export const registerStorageRoutes = (
         });
         const s3Objects = await listS3Objects(s3Prefix);
 
-        // Union of S3File rows and physical S3 objects, minus the
-        // surviving fileIds — anything left is orphan storage.
-        const orphanKeys = new Set<string>();
-        const orphanFileIds = new Set<string>();
+        const s3CleanupPlan = buildTrimS3CleanupPlan({
+          survivingFileIds: trimPlan.survivingFileIds,
+          s3FileRecords,
+          s3Objects,
+        });
+        const deleteResult = await deleteS3KeysInBatches({
+          keys: s3CleanupPlan.orphanKeys,
+          logPrefix: "[storage/trim]",
+          deleteObject: deleteS3Object,
+        });
+        s3ObjectsDeleted = deleteResult.deleted;
+        s3DeleteErrors = deleteResult.errors;
 
-        for (const record of s3FileRecords) {
-          if (!survivingFileIds.has(record.fileId)) {
-            orphanKeys.add(record.s3Key);
-            orphanFileIds.add(record.fileId);
-          }
-        }
-
-        for (const obj of s3Objects) {
-          const fileId = fileIdFromS3Key(obj.key);
-          if (fileId && !survivingFileIds.has(fileId)) {
-            orphanKeys.add(obj.key);
-          }
-        }
-
-        for (const key of orphanKeys) {
-          try {
-            await deleteS3Object(key);
-            s3ObjectsDeleted++;
-          } catch (err) {
-            console.error(`[storage/trim] Failed to delete S3 object: ${key}`, err);
-            s3DeleteErrors++;
-          }
-        }
-
-        if (orphanFileIds.size > 0) {
+        if (s3CleanupPlan.orphanFileIds.length > 0) {
           await prisma.s3File.deleteMany({
-            where: { drawingId: id, fileId: { in: Array.from(orphanFileIds) } },
+            where: {
+              drawingId: id,
+              fileId: { in: s3CleanupPlan.orphanFileIds },
+            },
           });
         }
       }
@@ -169,8 +141,8 @@ export const registerStorageRoutes = (
       await prisma.drawing.update({
         where: { id },
         data: {
-          elements: JSON.stringify(activeElements),
-          files: JSON.stringify(cleanedFiles),
+          elements: JSON.stringify(trimPlan.activeElements),
+          files: JSON.stringify(trimPlan.cleanedFiles),
           version: { increment: 1 },
         },
       });
@@ -179,13 +151,13 @@ export const registerStorageRoutes = (
 
       return res.json({
         trimmed: {
-          elementsRemoved,
-          filesRemoved,
+          elementsRemoved: trimPlan.elementsRemoved,
+          filesRemoved: trimPlan.filesRemoved,
           s3ObjectsDeleted,
           s3DeleteErrors,
         },
       });
-    })
+    }),
   );
 
   // ------------------------------------------------------------------
@@ -209,16 +181,6 @@ export const registerStorageRoutes = (
 
       const elements: any[] = parseJsonField(drawing.elements, []);
       const files: Record<string, any> = parseJsonField(drawing.files, {});
-
-      // Canvas refs (all elements including deleted)
-      const allCanvasRefs = collectReferencedFileIds(elements, true);
-      // Active canvas refs (non-deleted only)
-      const activeCanvasRefs = collectReferencedFileIds(elements, false);
-
-      // SQLite file keys
-      const sqliteFileIds = new Set(Object.keys(files));
-
-      // S3File records and actual S3 objects (drawing-scoped)
       const s3Prefix = drawingS3Prefix(userId, id);
       let s3FileRecords: S3FileRecord[] = [];
       let s3Objects: S3ObjectRecord[] = [];
@@ -231,23 +193,15 @@ export const registerStorageRoutes = (
         s3Objects = await listS3Objects(s3Prefix);
       }
 
-      const filesList = buildFilesDiff({
-        allCanvasRefs,
-        activeCanvasRefs,
-        sqliteFileIds,
+      const diffResponse = buildFilesDiffResponse({
+        elements,
+        files,
         s3FileRecords,
         s3Objects,
       });
 
-      return res.json({
-        summary: {
-          totalCanvasRefs: allCanvasRefs.size,
-          totalSqliteFiles: sqliteFileIds.size,
-          totalS3Files: s3Objects.length,
-        },
-        files: filesList,
-      });
-    })
+      return res.json(diffResponse);
+    }),
   );
 
   // ------------------------------------------------------------------
@@ -264,7 +218,9 @@ export const registerStorageRoutes = (
       const { confirmName, fileIds: rawFileIds } = req.body ?? {};
 
       if (!Array.isArray(rawFileIds) || rawFileIds.length === 0) {
-        return res.status(400).json({ error: "fileIds must be a non-empty array" });
+        return res
+          .status(400)
+          .json({ error: "fileIds must be a non-empty array" });
       }
 
       // Validate every entry: same regex as the rest of the codebase
@@ -297,14 +253,12 @@ export const registerStorageRoutes = (
 
       const elements: any[] = parseJsonField(drawing.elements, []);
       const files: Record<string, any> = parseJsonField(drawing.files, {});
+      const deletePlan = buildOrphanDeletePlan({ elements, files, fileIds });
 
-      // Safety: reject if any fileId is still referenced by a non-deleted element
-      const activeRefs = collectReferencedFileIds(elements, false);
-      const blockedIds = fileIds.filter((fid) => activeRefs.has(fid));
-      if (blockedIds.length > 0) {
+      if (deletePlan.blockedIds.length > 0) {
         return res.status(400).json({
           error: "Cannot delete files referenced by active elements",
-          blockedFileIds: blockedIds,
+          blockedFileIds: deletePlan.blockedIds,
         });
       }
 
@@ -314,77 +268,40 @@ export const registerStorageRoutes = (
       // sibling drawing. Doing N+1 sequential lookups + deletes per
       // file would tie up the request unnecessarily for large
       // selections.
-      let s3ObjectsDeleted = 0;
       let s3DeleteErrors = 0;
 
       if (isS3Enabled()) {
         const s3Records = await prisma.s3File.findMany({
           where: { drawingId: id, fileId: { in: fileIds } },
         });
-
-        const S3_DELETE_CONCURRENCY = 8;
-        for (let i = 0; i < s3Records.length; i += S3_DELETE_CONCURRENCY) {
-          const batch = s3Records.slice(i, i + S3_DELETE_CONCURRENCY);
-          const results = await Promise.allSettled(
-            batch.map((rec) => deleteS3Object(rec.s3Key)),
-          );
-          for (let j = 0; j < results.length; j++) {
-            const result = results[j];
-            if (result.status === "fulfilled") {
-              s3ObjectsDeleted++;
-            } else {
-              console.error(
-                `[storage/orphans] Failed to delete S3 object: ${batch[j].s3Key}`,
-                result.reason,
-              );
-              s3DeleteErrors++;
-            }
-          }
-        }
+        const deleteResult = await deleteS3KeysInBatches({
+          keys: s3Records.map((record) => record.s3Key),
+          logPrefix: "[storage/orphans]",
+          deleteObject: deleteS3Object,
+        });
+        s3DeleteErrors = deleteResult.errors;
 
         await prisma.s3File.deleteMany({
           where: { drawingId: id, fileId: { in: fileIds } },
         });
       }
 
-      // Update the drawing's files JSON regardless of S3 outcomes —
-      // the JSON entry is what the editor reads, and once trimmed it
-      // can't be restored from the bucket alone.
-      for (const fileId of fileIds) {
-        delete files[fileId];
-      }
-      const deletedCount = fileIds.length;
       const errorCount = s3DeleteErrors;
-
-      // Also remove deleted elements that reference the orphaned files,
-      // so the files disappear from the diff completely.
-      const deletedFileIdSet = new Set(fileIds as string[]);
-      const cleanedElements = elements.filter((el: any) => {
-        if (
-          el.isDeleted &&
-          el.type === "image" &&
-          typeof el.fileId === "string" &&
-          deletedFileIdSet.has(el.fileId)
-        ) {
-          return false; // remove this deleted element
-        }
-        return true;
-      });
 
       // Update drawing with cleaned files and elements. Bump version so
       // concurrent editors reload instead of silently overwriting.
       await prisma.drawing.update({
         where: { id },
         data: {
-          files: JSON.stringify(files),
-          elements: JSON.stringify(cleanedElements),
+          files: JSON.stringify(deletePlan.cleanedFiles),
+          elements: JSON.stringify(deletePlan.cleanedElements),
           version: { increment: 1 },
         },
       });
       invalidateDrawingsCache();
       notifyServerStateChange(id);
 
-      return res.json({ deleted: deletedCount, errors: errorCount });
-    })
+      return res.json({ deleted: deletePlan.deletedCount, errors: errorCount });
+    }),
   );
 };

@@ -10,6 +10,7 @@ import {
   isS3Enabled,
   generatePresignedDownloadUrl,
 } from "../s3";
+import { canViewDrawing, getDrawingAccess } from "../authz/sharing";
 
 const DOWNLOAD_EXPIRES_IN = 3600; // 1 hour   – cached by browser
 
@@ -65,38 +66,14 @@ export const registerFileRoutes = (
         return res.status(400).json({ error: "Invalid id segment" });
       }
 
-      // Drawing access decides authorisation; fall back to 404 on
+      // Drawing access decides authorization; fall back to 404 on
       // miss so we don't leak existence of a (drawing, fileId) pair.
-      const drawing = await prisma.drawing.findUnique({
-        where: { id: drawingId },
-        select: {
-          id: true,
-          userId: true,
-          permissions: { select: { granteeUserId: true } },
-          linkShares: {
-            where: {
-              revokedAt: null,
-              OR: [
-                { expiresAt: null },
-                { expiresAt: { gt: new Date() } },
-              ],
-            },
-            select: { id: true },
-          },
-        },
+      const access = await getDrawingAccess({
+        prisma,
+        principal: req.user?.id ? { kind: "user", userId: req.user.id } : null,
+        drawingId,
       });
-      if (!drawing) {
-        return res.status(404).json({ error: "File not found" });
-      }
-
-      const callerUserId = req.user?.id ?? null;
-      const isOwner = callerUserId !== null && drawing.userId === callerUserId;
-      const isExplicitGrantee =
-        callerUserId !== null &&
-        drawing.permissions.some((p) => p.granteeUserId === callerUserId);
-      const hasActiveLinkShare = drawing.linkShares.length > 0;
-
-      if (!isOwner && !isExplicitGrantee && !hasActiveLinkShare) {
+      if (!canViewDrawing(access)) {
         return res.status(404).json({ error: "File not found" });
       }
 

@@ -8,11 +8,13 @@ type Props = {
   sharing: { permissions: api.DrawingPermissionRow[] } | null;
   userQuery: string;
   userResults: api.ShareResolvedUser[];
-  drawingId: string;
   setUserQuery: (value: string) => void;
   handleAddUser: (userId: string) => void | Promise<void>;
   handleRevokeUser: (permissionId: string) => void | Promise<void>;
-  refresh: () => void | Promise<void>;
+  handleUpdateUserPermission: (
+    granteeUserId: string,
+    permission: "view" | "edit",
+  ) => void | Promise<void>;
 };
 
 export const SharePeopleSection: React.FC<Props> = ({
@@ -20,11 +22,10 @@ export const SharePeopleSection: React.FC<Props> = ({
   sharing,
   userQuery,
   userResults,
-  drawingId,
   setUserQuery,
   handleAddUser,
   handleRevokeUser,
-  refresh,
+  handleUpdateUserPermission,
 }) => (
   <>
     <section className="relative">
@@ -52,10 +53,18 @@ export const SharePeopleSection: React.FC<Props> = ({
                 {candidate.name.charAt(0).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-black text-slate-900 dark:text-neutral-100 truncate">{candidate.name}</div>
-                <div className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 truncate">{candidate.email}</div>
+                <div className="text-xs font-black text-slate-900 dark:text-neutral-100 truncate">
+                  {candidate.name}
+                </div>
+                <div className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 truncate">
+                  {candidate.email}
+                </div>
               </div>
-              <Plus size={16} className="text-slate-400 group-hover:text-indigo-600 transition-colors" strokeWidth={3} />
+              <Plus
+                size={16}
+                className="text-slate-400 group-hover:text-indigo-600 transition-colors"
+                strokeWidth={3}
+              />
             </button>
           ))}
         </div>
@@ -63,7 +72,9 @@ export const SharePeopleSection: React.FC<Props> = ({
     </section>
 
     <section className="space-y-2">
-      <h3 className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-neutral-500 px-1">People with access</h3>
+      <h3 className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-neutral-500 px-1">
+        People with access
+      </h3>
       <div className="space-y-0">
         <div className="flex items-center gap-3 px-1 py-1.5">
           <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-neutral-800 flex items-center justify-center text-slate-600 dark:text-neutral-300 font-black text-sm border-2 border-black dark:border-neutral-600 shrink-0">
@@ -71,33 +82,45 @@ export const SharePeopleSection: React.FC<Props> = ({
           </div>
           <div className="flex-1 min-w-0 flex flex-col justify-center">
             <div className="text-xs font-black text-slate-900 dark:text-neutral-100 leading-tight">
-              {user?.name} <span className="text-slate-400 dark:text-neutral-500 font-bold ml-1">(you)</span>
+              {user?.name}{" "}
+              <span className="text-slate-400 dark:text-neutral-500 font-bold ml-1">
+                (you)
+              </span>
             </div>
-            <div className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 mt-0.5">{user?.email}</div>
+            <div className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 mt-0.5">
+              {user?.email}
+            </div>
           </div>
-          <div className="text-[8px] font-black uppercase tracking-widest text-slate-400 dark:text-neutral-500 pr-1 shrink-0">Owner</div>
+          <div className="text-[8px] font-black uppercase tracking-widest text-slate-400 dark:text-neutral-500 pr-1 shrink-0">
+            Owner
+          </div>
         </div>
 
         {(sharing?.permissions || []).map((permission) => (
-          <div key={permission.id} className="flex items-center gap-3 px-1 py-1.5 group">
+          <div
+            key={permission.id}
+            className="flex items-center gap-3 px-1 py-1.5 group"
+          >
             <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 font-black text-sm border-2 border-indigo-600 dark:border-indigo-500 shrink-0">
               {permission.granteeUser.name.charAt(0).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0 flex flex-col justify-center">
-              <div className="text-xs font-black text-slate-900 dark:text-neutral-100 leading-tight truncate">{permission.granteeUser.name}</div>
-              <div className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 mt-0.5 truncate">{permission.granteeUser.email}</div>
+              <div className="text-xs font-black text-slate-900 dark:text-neutral-100 leading-tight truncate">
+                {permission.granteeUser.name}
+              </div>
+              <div className="text-[10px] font-bold text-slate-500 dark:text-neutral-400 mt-0.5 truncate">
+                {permission.granteeUser.email}
+              </div>
             </div>
             <CustomSelect
               value={permission.permission}
               onChange={async (value) => {
                 if (value === "remove") await handleRevokeUser(permission.id);
-                else {
-                  await api.upsertDrawingPermission(drawingId, {
-                    granteeUserId: permission.granteeUserId,
-                    permission: value as any,
-                  });
-                  void refresh();
-                }
+                else if (value === "view" || value === "edit")
+                  await handleUpdateUserPermission(
+                    permission.granteeUserId,
+                    value,
+                  );
               }}
               options={[
                 { label: "Viewer", value: "view" },

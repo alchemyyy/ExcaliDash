@@ -1,56 +1,14 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { createPortal } from "react-dom";
-import {
-  PenTool,
-  Trash2,
-  FolderInput,
-  ArrowRight,
-  Check,
-  Clock,
-  Copy,
-  Download,
-  HardDrive,
-  Loader2,
-} from "lucide-react";
-import type { DrawingSummary, Collection, Drawing } from "../types";
+import { PenTool, Check, Clock } from "lucide-react";
+import type { DrawingSummary, Collection } from "../types";
 import { formatDistanceToNow } from "date-fns";
 import clsx from "clsx";
 import { exportDrawingToFile } from "../utils/exportUtils";
-import { previewHasEmbeddedImages } from "../utils/previewSvg";
 import { StorageManageModal } from "./StorageManageModal";
+import { CollectionPicker } from "./drawing-card/CollectionPicker";
+import { DrawingCardContextMenu } from "./drawing-card/DrawingCardContextMenu";
+import { useDrawingPreview } from "./drawing-card/useDrawingPreview";
 import * as api from "../api";
-
-type HydratedDrawingData = {
-  elements: any[];
-  appState: any;
-  files: Record<string, any>;
-};
-
-const normalizeImageElementsForPreview = (
-  elements: any[] = [],
-  files: Record<string, any> = {},
-): any[] =>
-  elements.map((element) => {
-    if (
-      !element ||
-      element.type !== "image" ||
-      typeof element.fileId !== "string"
-    ) {
-      return element;
-    }
-    const file = files[element.fileId];
-    const hasImageData =
-      typeof file?.dataURL === "string" &&
-      file.dataURL.startsWith("data:image/") &&
-      file.dataURL.length > 0;
-    if (!hasImageData || element.status === "saved") {
-      return element;
-    }
-    return {
-      ...element,
-      status: "saved",
-    };
-  });
 
 interface DrawingCardProps {
   drawing: DrawingSummary;
@@ -69,12 +27,6 @@ interface DrawingCardProps {
   onMouseDown?: (e: React.MouseEvent, id: string) => void;
   onPreviewGenerated?: (id: string, preview: string) => void;
 }
-
-const ContextMenuPortal: React.FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
-  return createPortal(children, document.body);
-};
 
 export const DrawingCard: React.FC<DrawingCardProps> = ({
   drawing,
@@ -97,9 +49,6 @@ export const DrawingCard: React.FC<DrawingCardProps> = ({
   const [showMoveSubmenu, setShowMoveSubmenu] = useState(false);
   const [showCollectionDropdown, setShowCollectionDropdown] = useState(false);
   const [newName, setNewName] = useState(drawing.name);
-  const [previewSvg, setPreviewSvg] = useState<string | null>(
-    drawing.preview ?? null,
-  );
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -108,20 +57,8 @@ export const DrawingCard: React.FC<DrawingCardProps> = ({
   const [showStorageModal, setShowStorageModal] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [fullData, setFullData] = useState<HydratedDrawingData | null>(null);
-
-  const hasEmbeddedImages = previewHasEmbeddedImages(previewSvg);
-  const fullDataRef = React.useRef(fullData);
-  fullDataRef.current = fullData;
-
-  const fullDataPromiseRef = React.useRef<Promise<HydratedDrawingData> | null>(
-    null,
-  );
-
-  useEffect(() => {
-    setFullData(null);
-    fullDataPromiseRef.current = null;
-  }, [drawing.id]);
+  const { previewSvg, hasEmbeddedImages, buildExportDrawing } =
+    useDrawingPreview(drawing, onPreviewGenerated);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,94 +74,11 @@ export const DrawingCard: React.FC<DrawingCardProps> = ({
     };
   }, [drawing.id, isShared, isTrash]);
 
-  const drawingIdRef = React.useRef(drawing.id);
-  drawingIdRef.current = drawing.id;
-
-  const ensureFullData = useCallback(async (): Promise<HydratedDrawingData> => {
-    if (fullDataRef.current) {
-      return fullDataRef.current;
-    }
-    if (fullDataPromiseRef.current) {
-      return fullDataPromiseRef.current;
-    }
-    const currentDrawingId = drawingIdRef.current;
-    const promise = api
-      .getDrawing(currentDrawingId)
-      .then((fullDrawing) => {
-        const payload: HydratedDrawingData = {
-          elements: fullDrawing.elements || [],
-          appState: fullDrawing.appState || {},
-          files: fullDrawing.files || {},
-        };
-        setFullData(payload);
-        fullDataPromiseRef.current = null;
-        return payload;
-      })
-      .catch((error) => {
-        fullDataPromiseRef.current = null;
-        throw error;
-      });
-    fullDataPromiseRef.current = promise;
-    return promise;
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (drawing.preview) {
-      setPreviewSvg(drawing.preview);
-      return;
-    }
-    const generatePreview = async () => {
-      try {
-        const data = await ensureFullData();
-        if (cancelled) return;
-        if (!data?.elements || !data?.appState) return;
-
-        const { exportToSvg } = await import("@excalidraw/excalidraw");
-        if (cancelled) return;
-
-        const svg = await exportToSvg({
-          elements: normalizeImageElementsForPreview(
-            data.elements,
-            data.files || {},
-          ),
-          appState: {
-            ...data.appState,
-            exportBackground: true,
-            viewBackgroundColor: data.appState.viewBackgroundColor || "#ffffff",
-          },
-          files: data.files || {},
-          exportPadding: 10,
-        });
-
-        if (cancelled) return;
-        const previewHtml = svg.outerHTML;
-        setPreviewSvg(previewHtml);
-        onPreviewGenerated?.(drawing.id, previewHtml);
-      } catch (e) {
-        if (!cancelled) {
-          console.error("Failed to generate preview", e);
-        }
-      }
-    };
-    generatePreview();
-    return () => {
-      cancelled = true;
-    };
-  }, [drawing.id, drawing.preview, onPreviewGenerated]);
-
   const handleExport = useCallback(async () => {
     try {
       setIsExporting(true);
       setExportError(null);
-      const data = await ensureFullData();
-      const drawingPayload: Drawing = {
-        ...drawing,
-        elements: data.elements || [],
-        appState: data.appState || {},
-        files: data.files || {},
-      };
-      exportDrawingToFile(drawingPayload);
+      exportDrawingToFile(await buildExportDrawing());
     } catch (error) {
       console.error("Failed to export drawing", error);
       setExportError("Failed to export drawing. Please try again.");
@@ -232,7 +86,7 @@ export const DrawingCard: React.FC<DrawingCardProps> = ({
     } finally {
       setIsExporting(false);
     }
-  }, [drawing, ensureFullData]);
+  }, [buildExportDrawing]);
 
   useEffect(() => {
     const handleClick = () => setContextMenu(null);
@@ -276,8 +130,10 @@ export const DrawingCard: React.FC<DrawingCardProps> = ({
         onMouseDown={(e) => onMouseDown?.(e, drawing.id)}
         className={clsx(
           "drawing-card group relative flex flex-col bg-white dark:bg-neutral-900 rounded-2xl border-2 transition-all duration-200 ease-out",
-          !isTrash && "hover:-translate-y-1 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] dark:hover:shadow-[4px_4px_0px_0px_rgba(255,255,255,0.2)]",
-          isTrash && "shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] dark:shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)] opacity-80 grayscale-[0.5]",
+          !isTrash &&
+            "hover:-translate-y-1 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] dark:hover:shadow-[4px_4px_0px_0px_rgba(255,255,255,0.2)]",
+          isTrash &&
+            "shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] dark:shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)] opacity-80 grayscale-[0.5]",
           isSelected
             ? "border-neutral-500 dark:border-neutral-500 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] dark:shadow-[4px_4px_0px_0px_rgba(255,255,255,0.2)]"
             : "border-black dark:border-neutral-700 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] dark:shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)]",
@@ -310,7 +166,8 @@ export const DrawingCard: React.FC<DrawingCardProps> = ({
           onClick={(e) => !isTrash && onClick(drawing.id, e)}
           className={clsx(
             "aspect-[16/10] bg-slate-50 dark:bg-neutral-800/30 relative overflow-hidden flex items-center justify-center border-b-2 border-black dark:border-neutral-700 rounded-t-xl transition-colors",
-            !isTrash && "cursor-pointer group-hover:bg-neutral-100/10 dark:group-hover:bg-neutral-850",
+            !isTrash &&
+              "cursor-pointer group-hover:bg-neutral-100/10 dark:group-hover:bg-neutral-850",
             isTrash && "cursor-default",
           )}
         >
@@ -382,260 +239,53 @@ export const DrawingCard: React.FC<DrawingCardProps> = ({
                 {formatDistanceToNow(drawing.updatedAt)} ago
               </p>
 
-              <div
-                className="relative"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center gap-1 flex-wrap justify-start xs:justify-end">
-                  {/* Collection name badge */}
-                  <button
-                    onClick={() => {
-                      if (isShared || isSharedCollection) return;
-                      setShowCollectionDropdown(!showCollectionDropdown);
-                    }}
-                    data-testid={`collection-picker-${drawing.id}`}
-                    aria-haspopup="listbox"
-                    aria-expanded={showCollectionDropdown}
-                    disabled={isShared || isSharedCollection}
-                    className={clsx(
-                      "px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wide max-w-[120px] truncate transition-all border",
-                      isShared || isSharedCollection
-                        ? "bg-slate-50 dark:bg-neutral-800/40 text-slate-400 dark:text-neutral-500 border-neutral-100 dark:border-neutral-800 cursor-not-allowed"
-                        : "bg-slate-50 dark:bg-neutral-800 text-slate-500 dark:text-neutral-400 cursor-pointer border-neutral-200/60 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 hover:bg-neutral-100 dark:hover:bg-neutral-700/50",
-                    )}
-                  >
-                    {isShared
-                      ? "Shared"
-                      : drawing.collectionId
-                        ? collections.find((c) => c.id === drawing.collectionId)
-                            ?.name || "Collection"
-                        : "Unorganized"}
-                  </button>
-
-                  {/* Creator badge */}
-                  {drawing.creatorName && (
-                    <span
-                      title={drawing.creatorName}
-                      className="px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wide border bg-indigo-50/50 dark:bg-indigo-900/10 text-indigo-500 dark:text-indigo-400 border-indigo-100 dark:border-indigo-900/50 truncate max-w-[120px]"
-                    >
-                      {drawing.creatorName}
-                    </span>
-                  )}
-
-                  {/* Access level badge */}
-                  {isSharedCollection &&
-                    drawing.accessLevel &&
-                    drawing.accessLevel !== "owner" && (
-                      <span
-                        className={clsx(
-                          "px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wide border",
-                          drawing.accessLevel === "edit"
-                            ? "bg-emerald-50/50 dark:bg-emerald-900/10 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-900/30"
-                            : "bg-amber-50/50 dark:bg-amber-900/10 text-amber-600 dark:text-amber-400 border-amber-100 dark:border-amber-900/30",
-                        )}
-                      >
-                        {drawing.accessLevel === "edit" ? "Editor" : "Viewer"}
-                      </span>
-                    )}
-                </div>
-
-                {!isShared && showCollectionDropdown && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-10"
-                      onClick={() => setShowCollectionDropdown(false)}
-                    />
-                    <div className="absolute right-0 bottom-full mb-1.5 w-48 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 shadow-lg z-20 py-1 max-h-56 overflow-y-auto custom-scrollbar animate-in fade-in slide-in-from-bottom-2 duration-150">
-                      <button
-                        data-testid="collection-option-unorganized"
-                        onClick={() => {
-                          onMoveToCollection(drawing.id, null);
-                          setShowCollectionDropdown(false);
-                        }}
-                        className={clsx(
-                          "w-full px-3 py-2 text-xs text-left flex items-center justify-between hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors",
-                          drawing.collectionId === null
-                            ? "text-neutral-900 dark:text-white font-bold bg-neutral-100 dark:bg-neutral-800"
-                            : "text-slate-600 dark:text-neutral-400",
-                        )}
-                      >
-                        Unorganized{" "}
-                        {drawing.collectionId === null && <Check size={12} />}
-                      </button>
-                      {collections.map((c) => (
-                        <button
-                          key={c.id}
-                          data-testid={`collection-option-${c.id}`}
-                          onClick={() => {
-                            onMoveToCollection(drawing.id, c.id);
-                            setShowCollectionDropdown(false);
-                          }}
-                          className={clsx(
-                            "w-full px-3 py-2 text-xs text-left flex items-center justify-between hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors truncate",
-                            drawing.collectionId === c.id
-                              ? "text-neutral-900 dark:text-white font-bold bg-neutral-100 dark:bg-neutral-800"
-                              : "text-slate-600 dark:text-neutral-400",
-                          )}
-                        >
-                          <span className="truncate">{c.name}</span>
-                          {drawing.collectionId === c.id && <Check size={12} />}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
+              <CollectionPicker
+                drawing={drawing}
+                collections={collections}
+                isShared={isShared}
+                isSharedCollection={isSharedCollection}
+                isOpen={showCollectionDropdown}
+                onToggle={() =>
+                  setShowCollectionDropdown(!showCollectionDropdown)
+                }
+                onClose={() => setShowCollectionDropdown(false)}
+                onMoveToCollection={onMoveToCollection}
+              />
             </div>
           </div>
         </div>
       </div>
 
       {contextMenu && (
-        <ContextMenuPortal>
-          <div
-            className="fixed inset-0 z-50"
-            onClick={() => setContextMenu(null)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setContextMenu(null);
-            }}
-          >
-            <div
-              className="absolute bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 shadow-lg py-1 min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
-              style={{ top: contextMenu.y, left: contextMenu.x }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {!isTrash &&
-              (!isShared ||
-                drawing.accessLevel === "edit" ||
-                drawing.accessLevel === "owner") ? (
-                <button
-                  onClick={() => {
-                    setIsRenaming(true);
-                    setContextMenu(null);
-                  }}
-                  className="w-full px-3 py-2 text-sm text-left text-slate-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-white flex items-center gap-2"
-                >
-                  <PenTool size={14} /> Rename
-                </button>
-              ) : null}
-              {!isShared ? (
-                <div
-                  className="relative group/move"
-                  onMouseEnter={() => setShowMoveSubmenu(true)}
-                  onMouseLeave={() => setShowMoveSubmenu(false)}
-                >
-                  <button className="w-full px-3 py-2 text-sm text-left text-slate-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-white flex items-center justify-between">
-                    <span className="flex items-center gap-2">
-                      <FolderInput size={14} /> Move to...
-                    </span>
-                    <ArrowRight size={12} />
-                  </button>
-                  {showMoveSubmenu && (
-                    <div className="absolute left-full top-0 ml-1 w-40 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 shadow-lg py-1 max-h-64 overflow-y-auto">
-                      <button
-                        onClick={() => {
-                          onMoveToCollection(drawing.id, null);
-                          setContextMenu(null);
-                        }}
-                        className={clsx(
-                          "w-full px-3 py-1.5 text-xs text-left flex items-center justify-between hover:bg-neutral-100 dark:hover:bg-neutral-800",
-                          drawing.collectionId === null
-                            ? "text-neutral-900 dark:text-white font-medium"
-                            : "text-slate-600 dark:text-neutral-400",
-                        )}
-                      >
-                        Unorganized{" "}
-                        {drawing.collectionId === null && <Check size={10} />}
-                      </button>
-                      {collections.map((c) => (
-                        <button
-                          key={c.id}
-                          onClick={() => {
-                            onMoveToCollection(drawing.id, c.id);
-                            setContextMenu(null);
-                          }}
-                          className={clsx(
-                            "w-full px-3 py-1.5 text-xs text-left flex items-center justify-between hover:bg-neutral-100 dark:hover:bg-neutral-800 truncate",
-                            drawing.collectionId === c.id
-                              ? "text-neutral-900 dark:text-white font-medium"
-                              : "text-slate-600 dark:text-neutral-400",
-                          )}
-                        >
-                          <span className="truncate">{c.name}</span>
-                          {drawing.collectionId === c.id && <Check size={10} />}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : null}
-              {!isShared ? (
-                <>
-                  <div className="border-t border-slate-50 dark:border-slate-800 my-1"></div>
-                  <button
-                    onClick={() => {
-                      onDuplicate(drawing.id);
-                      setContextMenu(null);
-                    }}
-                    className="w-full px-3 py-2 text-sm text-left text-slate-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-white flex items-center gap-2"
-                  >
-                    <Copy size={14} /> Duplicate
-                  </button>
-                </>
-              ) : null}
-              {!isShared && storageAvailable ? (
-                <>
-                  <button
-                    onClick={() => {
-                      setShowStorageModal(true);
-                      setContextMenu(null);
-                    }}
-                    className="w-full px-3 py-2 text-sm text-left text-slate-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-white flex items-center gap-2"
-                  >
-                    <HardDrive size={14} /> Manage storage
-                  </button>
-                  <div className="border-t border-slate-50 dark:border-slate-800 my-1"></div>
-                </>
-              ) : null}
-              <button
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  await handleExport();
-                  setContextMenu(null);
-                }}
-                disabled={isExporting}
-                className="w-full px-3 py-2 text-sm text-left text-slate-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isExporting ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <Download size={14} />
-                )}
-                {isExporting ? "Exporting..." : "Export"}
-              </button>
-              {exportError && (
-                <div className="px-3 py-2 text-xs text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-900/20">
-                  {exportError}
-                </div>
-              )}
-              {!isShared ? (
-                <>
-                  <div className="border-t border-slate-50 dark:border-slate-800 my-1"></div>
-                  <button
-                    onClick={() => {
-                      onDelete(drawing.id);
-                      setContextMenu(null);
-                    }}
-                    className="w-full px-3 py-2 text-sm text-left text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/30 flex items-center gap-2"
-                  >
-                    <Trash2 size={14} /> Delete
-                  </button>
-                </>
-              ) : null}
-            </div>
-          </div>
-        </ContextMenuPortal>
+        <DrawingCardContextMenu
+          drawing={drawing}
+          collections={collections}
+          position={contextMenu}
+          isTrash={isTrash}
+          isShared={isShared}
+          storageAvailable={storageAvailable}
+          isExporting={isExporting}
+          exportError={exportError}
+          showMoveSubmenu={showMoveSubmenu}
+          onShowMoveSubmenu={setShowMoveSubmenu}
+          onClose={() => setContextMenu(null)}
+          onRename={() => {
+            setIsRenaming(true);
+            setContextMenu(null);
+          }}
+          onMoveToCollection={onMoveToCollection}
+          onDuplicate={onDuplicate}
+          onDelete={onDelete}
+          onManageStorage={() => {
+            setShowStorageModal(true);
+            setContextMenu(null);
+          }}
+          onExport={async (e) => {
+            e.stopPropagation();
+            await handleExport();
+            setContextMenu(null);
+          }}
+        />
       )}
       <StorageManageModal
         isOpen={showStorageModal}

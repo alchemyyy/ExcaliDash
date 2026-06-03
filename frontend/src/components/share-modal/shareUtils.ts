@@ -16,6 +16,14 @@ export const toIsoFromDatetimeLocal = (value: string): string | undefined => {
   return date.toISOString();
 };
 
+export const toDatetimeLocalFromIso = (value: string | null): string => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+};
+
 export const calculateExpiresAt = (
   option: string,
   customDate?: string,
