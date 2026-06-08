@@ -45,9 +45,9 @@ const EXPIRY_OPTIONS = [
 export const calculateExpiresAt = (
   option: string,
   customDate?: string
-): string | null => {
+): string | null | undefined => {
   if (option === "never") return null;
-  if (option === "custom") return toIsoFromDatetimeLocal(customDate || "") ?? null;
+  if (option === "custom") return toIsoFromDatetimeLocal(customDate || "");
 
   const now = new Date();
   switch (option) {
@@ -56,9 +56,18 @@ export const calculateExpiresAt = (
     case "2d": now.setDate(now.getDate() + 2); break;
     case "7d": now.setDate(now.getDate() + 7); break;
     case "30d": now.setDate(now.getDate() + 30); break;
-    default: return null;
+    default: return undefined;
   }
   return now.toISOString();
+};
+
+const resolveLinkShareExpiresAt = (
+  option: string,
+  customDate?: string
+): { ok: true; expiresAt: string | null } | { ok: false } => {
+  const expiresAt = calculateExpiresAt(option, customDate);
+  if (expiresAt !== undefined) return { ok: true, expiresAt };
+  return { ok: false };
 };
 
 // Format an ISO timestamp for an <input type="datetime-local"> value (local time,
@@ -352,14 +361,15 @@ export const ShareModal: React.FC<Props> = ({ drawingId, drawingName, isOpen, on
       const custom = overrides?.customExpiry ?? customExpiry;
       setLinkPermission(perm);
 
-      // calculateExpiresAt returns `null` for "never" (explicit non-expiring) and an
-      // ISO string otherwise. Pass it straight through — no `?? fallback` that would
-      // reintroduce stale state.
-      const expiresAt = calculateExpiresAt(opt, custom);
+      const resolvedExpiry = resolveLinkShareExpiresAt(opt, custom);
+      if (!resolvedExpiry.ok) {
+        setError("Choose a valid auto-disable date");
+        return;
+      }
 
       await api.createLinkShare(drawingId, {
         permission: perm,
-        expiresAt,
+        expiresAt: resolvedExpiry.expiresAt,
       });
 
       await refresh();

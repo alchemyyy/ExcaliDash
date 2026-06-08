@@ -16,8 +16,8 @@ describe("calculateExpiresAt", () => {
     expect(Number.isFinite(new Date(result as string).getTime())).toBe(true);
   });
 
-  it("returns null for an unknown option", () => {
-    expect(calculateExpiresAt("bogus")).toBeNull();
+  it("returns undefined for an unknown option", () => {
+    expect(calculateExpiresAt("bogus")).toBeUndefined();
   });
 
   it("converts a custom datetime-local value to an ISO string", () => {
@@ -26,8 +26,8 @@ describe("calculateExpiresAt", () => {
     expect(new Date(result as string).getFullYear()).toBe(2030);
   });
 
-  it("returns null for an empty custom value", () => {
-    expect(calculateExpiresAt("custom", "")).toBeNull();
+  it("returns undefined for an empty custom value", () => {
+    expect(calculateExpiresAt("custom", "")).toBeUndefined();
   });
 });
 
