@@ -42,9 +42,12 @@ const EXPIRY_OPTIONS = [
   { label: "Disable at...", value: "custom" },
 ];
 
-const calculateExpiresAt = (option: string, customDate?: string): string | undefined => {
-  if (option === "never") return undefined;
-  if (option === "custom") return toIsoFromDatetimeLocal(customDate || "");
+export const calculateExpiresAt = (
+  option: string,
+  customDate?: string
+): string | null => {
+  if (option === "never") return null;
+  if (option === "custom") return toIsoFromDatetimeLocal(customDate || "") ?? null;
 
   const now = new Date();
   switch (option) {
@@ -53,9 +56,29 @@ const calculateExpiresAt = (option: string, customDate?: string): string | undef
     case "2d": now.setDate(now.getDate() + 2); break;
     case "7d": now.setDate(now.getDate() + 7); break;
     case "30d": now.setDate(now.getDate() + 30); break;
-    default: return undefined;
+    default: return null;
   }
   return now.toISOString();
+};
+
+// Format an ISO timestamp for an <input type="datetime-local"> value (local time,
+// "YYYY-MM-DDTHH:mm"), or "" if the input is not a finite date.
+export const toDatetimeLocalValue = (iso: string | null): string => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+// Derive the dropdown state from an active link's expiresAt.
+//   null  -> "never"
+//   date  -> "custom" with the date pre-filled in the picker
+export const deriveExpiryStateFromLink = (
+  expiresAt: string | null
+): { expiryOption: string; customExpiry: string } => {
+  if (!expiresAt) return { expiryOption: "never", customExpiry: "" };
+  return { expiryOption: "custom", customExpiry: toDatetimeLocalValue(expiresAt) };
 };
 
 const CustomSelect: React.FC<{
@@ -190,6 +213,18 @@ export const ShareModal: React.FC<Props> = ({ drawingId, drawingName, isOpen, on
     setLinkPermission(activeLink.permission);
   }, [activeLink, isOpen]);
 
+  // Reflect the active link's real expiry in the dropdown, instead of leaving the
+  // default "1d". Without this, toggling permission could re-apply a 1-day expiry.
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!activeLink) return;
+    const { expiryOption: opt, customExpiry: custom } = deriveExpiryStateFromLink(
+      activeLink.expiresAt
+    );
+    setExpiryOption(opt);
+    setCustomExpiry(custom);
+  }, [activeLink, isOpen]);
+
   const refresh = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -300,18 +335,28 @@ export const ShareModal: React.FC<Props> = ({ drawingId, drawingName, isOpen, on
     }
   };
 
-  const handleUpdateLink = async (newPermission?: "view" | "edit", newExpiry?: string) => {
+  const handleUpdateLink = async (overrides?: {
+    permission?: "view" | "edit";
+    expiryOption?: string;
+    customExpiry?: string;
+  }) => {
     setIsLoading(true);
     setError(null);
     try {
       if (activeLink) {
         await api.revokeLinkShare(drawingId, activeLink.id);
       }
-      
-      const perm = newPermission ?? linkPermission;
+
+      const perm = overrides?.permission ?? linkPermission;
+      const opt = overrides?.expiryOption ?? expiryOption;
+      const custom = overrides?.customExpiry ?? customExpiry;
       setLinkPermission(perm);
-      const expiresAt = newExpiry ?? calculateExpiresAt(expiryOption, customExpiry);
-      
+
+      // calculateExpiresAt returns `null` for "never" (explicit non-expiring) and an
+      // ISO string otherwise. Pass it straight through — no `?? fallback` that would
+      // reintroduce stale state.
+      const expiresAt = calculateExpiresAt(opt, custom);
+
       await api.createLinkShare(drawingId, {
         permission: perm,
         expiresAt,
@@ -504,7 +549,7 @@ export const ShareModal: React.FC<Props> = ({ drawingId, drawingName, isOpen, on
                     <div className="flex flex-wrap items-center gap-2">
                       <CustomSelect
                         value={linkPermission}
-                        onChange={(val) => handleUpdateLink(val as any)}
+                        onChange={(val) => handleUpdateLink({ permission: val as "view" | "edit" })}
                         options={[
                           { label: "Viewer", value: "view" },
                           { label: "Editor", value: "edit" },
@@ -518,8 +563,7 @@ export const ShareModal: React.FC<Props> = ({ drawingId, drawingName, isOpen, on
                         onChange={(val) => {
                           setExpiryOption(val);
                           if (val !== "custom") {
-                            const nextExpiry = calculateExpiresAt(val);
-                            void handleUpdateLink(undefined, nextExpiry);
+                            void handleUpdateLink({ expiryOption: val });
                           }
                         }}
                         options={EXPIRY_OPTIONS}

@@ -61,12 +61,6 @@ export const registerDrawingRoutes = (
     return permission === "edit" ? 7 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
   };
 
-  const resolveMaxTtlMs = (): number => {
-    const parsed = Number(process.env.LINK_SHARE_MAX_TTL_MS);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    return 90 * 24 * 60 * 60 * 1000;
-  };
-
   const respondWithAuthErrorIfPresent = (
     req: express.Request,
     res: express.Response
@@ -799,26 +793,38 @@ export const registerDrawingRoutes = (
       return res.status(400).json({ error: "Validation error", message: "Invalid permission" });
     }
 
-    const rawExpiresAt = typeof req.body?.expiresAt === "string" ? req.body.expiresAt : null;
-    const expiresAtText = (rawExpiresAt || "").trim();
-    const requestedExpiresAt = expiresAtText.length > 0 ? new Date(expiresAtText) : null;
-    const hasValidRequestedExpiry = Boolean(requestedExpiresAt && Number.isFinite(requestedExpiresAt.getTime()));
-
     const now = Date.now();
-    const maxTtlMs = resolveMaxTtlMs();
     const defaultTtlMs = resolveDefaultTtlMs(permission);
 
-    let expiresAt: Date | null = null;
-    // View links can be truly non-expiring unless an explicit expiry is provided.
-    // Edit links default to an expiry window when none is provided.
-    if (permission === "view" && !hasValidRequestedExpiry && expiresAtText.length === 0) {
+    // Three explicit states for expiresAt:
+    //   - key present and null  -> never expire (for both view and edit)
+    //   - key present and a valid ISO date -> expire at that instant (no max cap)
+    //   - key absent / invalid  -> apply the permission default TTL
+    const hasExpiresAtKey = Object.prototype.hasOwnProperty.call(req.body ?? {}, "expiresAt");
+    const rawExpiresAt = req.body?.expiresAt;
+
+    let expiresAt: Date | null;
+    if (hasExpiresAtKey && rawExpiresAt === null) {
+      // Explicit "never auto-disable".
       expiresAt = null;
     } else {
-      const candidateTtlMs = hasValidRequestedExpiry && requestedExpiresAt
-        ? requestedExpiresAt.getTime() - now
-        : defaultTtlMs;
-      const ttlMs = Math.min(Math.max(candidateTtlMs, 60_000), maxTtlMs);
-      expiresAt = new Date(now + ttlMs);
+      const requestedDate =
+        typeof rawExpiresAt === "string" && rawExpiresAt.trim().length > 0
+          ? new Date(rawExpiresAt.trim())
+          : null;
+      const hasValidRequestedExpiry = Boolean(
+        requestedDate && Number.isFinite(requestedDate.getTime())
+      );
+
+      if (hasValidRequestedExpiry && requestedDate) {
+        // Honor the user's explicit date; enforce only a minimum so the link is
+        // usable, but do NOT cap how far out it may be.
+        const ttlMs = Math.max(requestedDate.getTime() - now, 60_000);
+        expiresAt = new Date(now + ttlMs);
+      } else {
+        // No usable expiry provided -> permission default TTL.
+        expiresAt = new Date(now + defaultTtlMs);
+      }
     }
 
     // Passphrase support is currently disabled. We keep passphraseHash nullable for backwards compatibility.
