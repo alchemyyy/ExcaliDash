@@ -16,7 +16,7 @@ Bundle: `ZimengXiong/ExcaliDash` offline export generated 2026-05-22. All work w
 | 59 | fixed | Changed drawing-list API to omit heavy previews unless explicitly requested, and kept dashboard consumers on lightweight list payloads. | `backend/src/routes/dashboard/drawingListRoutes.ts; frontend/src/api/drawings.ts; frontend/src/pages/dashboard/useDashboardData.test.ts` |
 | 63 | blocked | Recorded as upstream embedded-Excalidraw upgrade scope; no safe scoped open PR existed in the bundle. | `OFFLINE_RESOLUTION_LOG.md` |
 | 66 | fixed | Integrated OIDC discovery/algorithm handling and provider documentation for alg mismatches. | `backend/src/auth/oidcRoutes.ts; backend/src/auth/schemas.ts; docs/DEPLOYMENT.md` |
-| 71 | blocked | Documented why runtime Prisma provider switching is not safely mergeable with the current generated-client/migration model. | `OFFLINE_RESOLUTION_LOG.md` |
+| 71 | fixed | Implemented and documented runtime Prisma provider selection with separated SQLite/PostgreSQL migration handling. | `RELEASE.md; docs/DEPLOYMENT.md; backend/docker-entrypoint.sh; backend/scripts/provider-prisma.cjs` |
 | 76 | fixed | Added persisted server-side preferences for theme and dashboard sort, plus frontend save/load behavior. | `backend/prisma/schema.prisma; backend/src/auth/accountPreferencesRoutes.ts; frontend/src/context/ThemeContext.tsx; frontend/src/pages/Settings.tsx` |
 | 83 | fixed | Added scheduled SQLite backup scheduler, config/env support, startup wiring, and docs. | `backend/src/backups/scheduler.ts; backend/src/config.ts; backend/src/index.ts; docs/DEPLOYMENT.md` |
 | 84 | fixed | Allowed safe SVG data URLs to persist/reload without weakening unrelated sanitization. | `backend/src/security.ts; backend/src/__tests__/drawings.integration.ts` |
@@ -41,7 +41,7 @@ Bundle: `ZimengXiong/ExcaliDash` offline export generated 2026-05-22. All work w
 |---:|---|---|---|
 | 64 | no direct merge; superseded | Large stale pre-release/meta PR was superseded by current main plus smaller integrated PRs. | `OFFLINE_RESOLUTION_LOG.md` |
 | 70 | merge with modifications | Addressed persistence/deployment intent through README/docs instead of stale compose hunks. | `README.md; docs/DEPLOYMENT.md` |
-| 72 | no merge; blocked | Provider switching PR conflicts with Prisma generated-client/runtime constraints; issue #71 documented blocked. | `OFFLINE_RESOLUTION_LOG.md` |
+| 72 | merge with modifications | Provider switching intent is covered by runtime schema/provider setup, Docker startup generation, and provider-specific local Prisma workflows. | `RELEASE.md; docs/DEPLOYMENT.md; backend/docker-entrypoint.sh; backend/scripts/provider-prisma.cjs` |
 | 86 | merge | Integrated SVG data URL persistence fix. | `backend/src/security.ts; backend/src/__tests__/drawings.integration.ts` |
 | 105 | no direct merge; split/superseded | Extracted compatible hardening/documentation pieces; avoided stale broad refactor. | `backend/src/db/prisma.ts; backend/src/server/csrf.ts; docs/DEPLOYMENT.md` |
 | 120 | no direct merge; superseded | Older collection-sharing PR superseded by #154/#155 implementation. | `backend/src/routes/dashboard/collections.ts; frontend/src/components/ShareCollectionModal.tsx` |
@@ -81,7 +81,8 @@ Bundle: `ZimengXiong/ExcaliDash` offline export generated 2026-05-22. All work w
 ## Remaining risk
 
 - Backend build/typecheck/test validation now passes in the current local environment. Fresh sealed-network machines still need dependencies and Prisma engines preseeded before running `prisma generate`.
-- Blocked upstream/product items remain documented rather than falsely marked fixed: #63, #71/#72, #88, #111, #119, #121, #166.
+- Provider selection is implemented for SQLite and PostgreSQL; automatic data migration between database providers remains out of scope for this branch.
+- Blocked upstream/product items remain documented rather than falsely marked fixed: #63, #88, #111, #119, #121, #166.
 - S3 and sharing behavior was integrated from stale/conflicting PR metadata and should still receive maintainer review despite local validation coverage.
 
 ## Exact files changed
