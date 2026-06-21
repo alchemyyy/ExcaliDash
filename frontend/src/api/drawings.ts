@@ -60,6 +60,7 @@ export type SortDirection = "asc" | "desc";
 
 type DrawingQueryOptions = {
   includeData?: boolean;
+  includePreview?: boolean;
   limit?: number;
   offset?: number;
   sortField?: DrawingSortField;
@@ -74,6 +75,7 @@ const buildDrawingParams = (
   const params: Record<string, string | number> = {};
   if (search) params.search = search;
   if (collectionId !== undefined) params.collectionId = collectionId === null ? "null" : collectionId;
+  if (options?.includePreview) params.includePreview = "true";
   if (options?.limit !== undefined) params.limit = options.limit;
   if (options?.offset !== undefined) params.offset = options.offset;
   if (options?.sortField) params.sortField = options.sortField;

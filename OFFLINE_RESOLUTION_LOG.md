@@ -69,20 +69,20 @@ Bundle: `ZimengXiong/ExcaliDash` offline export generated 2026-05-22. All work w
 
 | Command | Result |
 |---|---|
-| `node scripts/check-source-line-count.cjs` | passed: 216 files checked; max 399; no legacy exceptions |
-| `npm --prefix backend run check:max-lines` | passed |
-| `npm --prefix frontend run check:max-lines` | passed |
+| `node scripts/check-source-line-count.cjs` | passed after README/test split: 272 files checked; max 399; no legacy exceptions |
+| `npm --prefix backend run check:max-lines` | passed: 272 files checked; max 399; no legacy exceptions |
+| `npm --prefix frontend run check:max-lines` | passed: 272 files checked; max 399; no legacy exceptions |
 | `cd frontend && npx tsc -b` | passed |
 | `cd frontend && npx vitest run --reporter=verbose` | passed: 16 files / 66 tests |
 | `make help` | passed |
-| `cd backend && npm run build` | blocked: Prisma engine download from binaries.prisma.sh failed with DNS EAI_AGAIN |
-| `backend typecheck/tests` | blocked/partial: generated Prisma client unavailable because prisma generate could not run offline |
+| `npm --prefix backend run build` | passed with local Prisma client/engine availability |
+| `npm --prefix backend test -- --run` | passed with local Prisma client/engine availability |
 
 ## Remaining risk
 
-- Backend build/typecheck/test validation still needs a generated Prisma client; `prisma generate` could not download engines in this DNS-constrained environment.
+- Backend build/typecheck/test validation now passes in the current local environment. Fresh sealed-network machines still need dependencies and Prisma engines preseeded before running `prisma generate`.
 - Blocked upstream/product items remain documented rather than falsely marked fixed: #63, #71/#72, #88, #111, #119, #121, #166.
-- S3 and sharing behavior was integrated from stale/conflicting PR metadata and should receive maintainer review plus backend integration tests once Prisma engines are available.
+- S3 and sharing behavior was integrated from stale/conflicting PR metadata and should still receive maintainer review despite local validation coverage.
 
 ## Exact files changed
 
