@@ -168,8 +168,11 @@ export const registerOidcCallbackRoute = (deps: RegisterOidcCallbackRouteDeps) =
         typeof systemConfig.oidcJitProvisioningEnabled === "boolean"
           ? systemConfig.oidcJitProvisioningEnabled
           : config.oidc.jitProvisioning;
+      // Trust email verification only from the signed ID token, never from the
+      // unsigned UserInfo response — otherwise a provider/tenant that lets a
+      // user assert email_verified could match an existing account by email.
       const emailVerified = readBooleanClaim(
-        claims,
+        idTokenClaims,
         config.oidc.emailVerifiedClaim,
       );
       if (config.oidc.requireEmailVerified && emailVerified !== true) {

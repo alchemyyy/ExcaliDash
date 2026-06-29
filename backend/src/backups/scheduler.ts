@@ -130,7 +130,9 @@ export const createSqliteBackup = async ({
     return null;
   }
 
-  await fs.promises.mkdir(backupDir, { recursive: true });
+  // Backups contain a full copy of the database (password hashes, API-key
+  // hashes, OIDC secrets), so restrict the directory and files to the owner.
+  await fs.promises.mkdir(backupDir, { recursive: true, mode: 0o700 });
   await prisma.$executeRawUnsafe("PRAGMA wal_checkpoint(PASSIVE)");
 
   const target = path.join(backupDir, `excalidash-sqlite-${timestampForFilename(new Date())}.db`);
@@ -140,6 +142,7 @@ export const createSqliteBackup = async ({
   } finally {
     source.close();
   }
+  await fs.promises.chmod(target, 0o600);
   await pruneOldBackups(backupDir, retentionDays);
   console.log(`[backup] Wrote SQLite backup: ${target}`);
   return target;
