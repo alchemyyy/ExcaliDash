@@ -1,5 +1,12 @@
 import crypto from "crypto";
 
+const API_KEY_SCRYPT_PEPPER = process.env.API_KEY_HASH_PEPPER || "api-key-hash-pepper";
+const API_KEY_SCRYPT_N = 1 << 14;
+const API_KEY_SCRYPT_R = 8;
+const API_KEY_SCRYPT_P = 1;
+const API_KEY_SCRYPT_KEYLEN = 32;
+const API_KEY_SCRYPT_MAXMEM = 32 * 1024 * 1024;
+
 export const API_KEY_PREFIX = "exd_";
 export const DEFAULT_API_KEY_SCOPES = [
   "drawings:read",
@@ -27,7 +34,14 @@ export const generateApiKey = (): {
 };
 
 export const hashApiKey = (token: string): string =>
-  crypto.createHash("sha256").update(token, "utf8").digest("hex");
+  crypto
+    .scryptSync(token, API_KEY_SCRYPT_PEPPER, API_KEY_SCRYPT_KEYLEN, {
+      N: API_KEY_SCRYPT_N,
+      r: API_KEY_SCRYPT_R,
+      p: API_KEY_SCRYPT_P,
+      maxmem: API_KEY_SCRYPT_MAXMEM,
+    })
+    .toString("hex");
 
 export const isApiKeyToken = (token: string): boolean => token.startsWith(API_KEY_PREFIX);
 
