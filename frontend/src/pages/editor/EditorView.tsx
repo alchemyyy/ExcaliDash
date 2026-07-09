@@ -253,6 +253,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
           onLibraryChange={onLibraryChange}
           excalidrawAPI={onSetExcalidrawAPI}
           UIOptions={UIOptions}
+          validateEmbeddable={true}
           viewModeEnabled={!canEdit}
         >
           <MainMenu>
